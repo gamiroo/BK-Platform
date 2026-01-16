@@ -20,5 +20,3 @@ Framework-free platform:
 - `pnpm test`
 - `pnpm build`
 - `pnpm check-balanceguard`
-
-<!-- branch protection sanity test -->
