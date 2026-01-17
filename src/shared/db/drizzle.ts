@@ -1,16 +1,19 @@
 // src/shared/db/drizzle.ts
-// Drizzle ORM connection builder.
-// Keep this isolated: application code uses the exported `db` accessors,
-// not raw Pool queries.
+/**
+ * Convenience DB accessor for application code that wants a Db handle.
+ *
+ * IMPORTANT:
+ * - This module must not connect at import time.
+ * - It provides a small adapter around `createDb()` which returns `{ db, close }`.
+ *
+ * Use cases:
+ * - scripts / one-off jobs can call `const { db, close } = getDb(); ... await close();`
+ * - serverless handlers can create per-invocation and close at end (or later we can memoize)
+ */
 
-import { drizzle } from "drizzle-orm/node-postgres";
-import { getPgPool } from "./client.js";
+import type { Db } from "./client.js";
+import { createDb } from "./client.js";
 
-let _db: ReturnType<typeof drizzle> | null = null;
-
-export function getDb() {
-  if (_db) return _db;
-  const pool = getPgPool();
-  _db = drizzle(pool);
-  return _db;
+export function getDb(): { db: Db; close: () => Promise<void> } {
+  return createDb();
 }
