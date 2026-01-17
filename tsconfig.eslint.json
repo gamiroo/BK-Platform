@@ -1,10 +1,16 @@
 {
   "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable"]
+  },
   "include": [
     "src/**/*.ts",
     "tests/**/*.ts",
     "scripts/**/*.ts",
-    "drizzle.config.ts"
+    "api/**/*.ts",
+    "drizzle.config.ts",
+    "*.ts",
+    "*.mts",
+    "*.cts"
   ]
 }
-

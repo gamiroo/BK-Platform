@@ -60,7 +60,10 @@ function main() {
 
     if (!looksLikeItDefinesRoutes) continue;
 
-    const hasBalanceGuardCall = /\bbalanceguard\s*\(/.test(src);
+    // Accept either the raw wrapper `balanceguard(` OR the surface wrappers
+    // `balanceguardSite(` / `balanceguardClient(` / `balanceguardAdmin(`.
+    const hasBalanceGuardCall = /\bbalanceguard(?:Site|Client|Admin)?\s*\(/.test(src);
+
     if (!hasBalanceGuardCall) offenders.push(rel);
   }
 

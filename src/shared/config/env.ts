@@ -7,13 +7,14 @@
  * - With strict TS + exactOptionalPropertyTypes, we keep parsing explicit.
  * - You can extend this type as you add infrastructure (DB, Stripe, etc).
  */
+import dotenv from "dotenv";
+dotenv.config({ path: ".env.local" });
 
 export type Env = Readonly<{
   NODE_ENV: "development" | "test" | "production";
   PORT: number;
-
+  DATABASE_URL: string;
   // Add later (uncomment when ready):
-  // DATABASE_URL: string;
   // STRIPE_SECRET_KEY: string;
   // STRIPE_WEBHOOK_SECRET_BILLING: string;
   // LOG_LEVEL?: "fatal" | "error" | "warn" | "info" | "debug" | "trace" | "silent";
@@ -45,7 +46,7 @@ export function loadEnv(): Env {
   if (!Number.isFinite(port)) throw new Error("PORT must be a number");
 
   // When you’re ready, enforce required vars here:
-  // const DATABASE_URL = requireEnv("DATABASE_URL");
+  const DATABASE_URL = requireEnv("DATABASE_URL");
 
-  return { NODE_ENV: nodeEnv, PORT: port };
+  return { NODE_ENV: nodeEnv, PORT: port, DATABASE_URL };
 }

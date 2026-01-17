@@ -1,18 +1,37 @@
 // drizzle.config.ts
-// Drizzle Kit config for migrations + schema generation.
-// This is intentionally simple and environment-driven.
-// - Never hardcode secrets in this file.
-// - `DATABASE_URL` must be present in your environment when running drizzle-kit.
+/**
+ * Drizzle Kit configuration (canonical).
+ *
+ * Source-of-truth schema lives in:
+ *   `src/shared/db/schema/index.ts`
+ *
+ * Generated migrations are written to:
+ *   `drizzle/`
+ *
+ * Notes:
+ * - Drizzle Kit only needs DATABASE_URL when running migrate/introspect.
+ * - We avoid throwing at import time so CI lint/typecheck can run safely even without DATABASE_URL.
+ */
 
-import type { Config } from "drizzle-kit";
+import { defineConfig } from "drizzle-kit";
 
-export default {
-  schema: "./src/shared/db/schema/**/*.ts",
-  out: "./src/shared/db/migrations",
+const url = process.env.DATABASE_URL ?? "";
+
+if (!url) {
+  // Do not throw here; CI may lint/typecheck without DB credentials.
+  // Commands that require DB connectivity (migrate/introspect) will fail fast at runtime.
+  // eslint-disable-next-line no-console
+  console.warn("[drizzle.config] DATABASE_URL is not set (ok for CI lint/typecheck).");
+}
+
+export default defineConfig({
   dialect: "postgresql",
+  schema: "./src/shared/db/schema/index.ts",
+  out: "./drizzle",
   dbCredentials: {
-    url: process.env.DATABASE_URL ?? "",
+    url,
   },
+  // Optional: enables nice output for generated migrations
   verbose: true,
   strict: true,
-} satisfies Config;
+});
