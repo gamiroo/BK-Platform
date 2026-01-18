@@ -58,17 +58,18 @@ export function makeVercelHandler(surface: Surface): (req: Request) => Promise<R
   return async (req: Request): Promise<Response> => {
     const ctx = createRequestContext();
 
-    // Establish ALS context synchronously, then execute async work within it.
     return await runWithRequestContext(ctx, async () => {
       try {
-        logger.info({ request_id: ctx.request_id, surface, method: req.method, url: req.url }, "http_request");
+        logger.info(
+          { request_id: ctx.request_id, surface, method: req.method, url: req.url },
+          "http_request"
+        );
 
         const res = await router.handle(ctx, req);
         return applySecurityHeaders(res);
       } catch (err) {
         const n = normalizeError(err);
 
-        // Log internal details server-side only.
         logger.error(
           {
             request_id: ctx.request_id,
@@ -76,17 +77,12 @@ export function makeVercelHandler(surface: Surface): (req: Request) => Promise<R
             code: n.code,
             status: n.status,
             message: n.logMessage,
-            // details is safe to log (never returned to clients)
             ...(n.details ? { details: n.details } : {}),
           },
           "http_error"
         );
 
-        // Never leak internal details to clients.
-        const safe = toHttpErrorResponse(ctx, n);
-
-        // Apply baseline hardening headers even to errors.
-        return applySecurityHeaders(safe);
+        return applySecurityHeaders(toHttpErrorResponse(ctx, n));
       }
     });
   };
