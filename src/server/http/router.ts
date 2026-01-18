@@ -7,8 +7,8 @@
 //
 // This file is intentionally small and boring: reliability > features.
 
-import type { RequestContext } from "@/shared/logging/request-context.js";
-import { jsonError } from "@/shared/http/responses.js";
+import type { RequestContext } from "../../shared/logging/request-context.js";
+import { jsonError } from "../../shared/http/responses.js";
 
 export type RouteHandler = (ctx: RequestContext, req: Request) => Promise<Response>;
 
