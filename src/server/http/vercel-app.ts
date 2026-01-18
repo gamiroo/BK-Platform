@@ -44,6 +44,22 @@ function getRouter(): Router {
   return r;
 }
 
+function stripSurfacePrefix(req: Request, surface: Surface): Request {
+  const url = new URL(req.url);
+
+  const prefix = `/api/${surface}`;
+  if (url.pathname === prefix) {
+    url.pathname = "/";
+  } else if (url.pathname.startsWith(prefix + "/")) {
+    url.pathname = url.pathname.slice(prefix.length);
+  }
+
+  // Recreate the Request with the normalized URL
+  // (keep method/headers/body)
+  return new Request(url.toString(), req);
+}
+
+
 /**
  * Build a Vercel Function handler that:
  * - creates a RequestContext
@@ -60,13 +76,17 @@ export function makeVercelHandler(surface: Surface): (req: Request) => Promise<R
 
     return await runWithRequestContext(ctx, async () => {
       try {
+
+        const normalizedReq = stripSurfacePrefix(req, surface);
+      
         logger.info(
           { request_id: ctx.request_id, surface, method: req.method, url: req.url },
           "http_request"
         );
-
-        const res = await router.handle(ctx, req);
+        
+        const res = await router.handle(ctx, normalizedReq);
         return applySecurityHeaders(res);
+        
       } catch (err) {
         const n = normalizeError(err);
 
