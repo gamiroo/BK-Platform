@@ -74,6 +74,7 @@ export function makeVercelHandler(surface: Surface): (req: Request) => Promise<R
   return async (req: Request): Promise<Response> => {
     const ctx = createRequestContext();
 
+    // Establish ALS context synchronously, then execute async work within it.
     return await runWithRequestContext(ctx, async () => {
       try {
 
