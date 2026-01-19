@@ -52,6 +52,6 @@ export class Router {
       return jsonError(ctx, 404, "NOT_FOUND", `No route for ${method} ${url.pathname}`);
     }
 
-    return route(ctx, req);
+    return await route(ctx, req);
   }
 }

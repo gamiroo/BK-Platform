@@ -13,4 +13,12 @@ export function registerSiteRoutes(router: Router): void {
       return json(ctx, { surface: "site", status: "ok" });
     })
   );
+
+  router.get(
+    "/",
+    balanceguardSite(async (ctx) => {
+      return json(ctx, { surface: "site", status: "ok" });
+    })
+  );
+
 }
