@@ -4,10 +4,12 @@
  *
  * Routes registered under site surface MUST be BalanceGuard-wrapped
  * with `surface: "site"` in their route module.
- */
-
-import { makeVercelHandler } from "../src/server/http/vercel-app.js";
-
+ */;
 export const config = { runtime: "nodejs" };
 
-export default makeVercelHandler("site");
+export default async function handler(req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  url.pathname = "/api/site/health";
+  return Response.redirect(url.toString(), 307);
+}
+
