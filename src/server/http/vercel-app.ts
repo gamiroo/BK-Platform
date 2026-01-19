@@ -1,22 +1,20 @@
 // src/server/http/vercel-app.ts
 /**
- * Vercel Functions adapter for Balance Kitchen API.
- *
- * This file exists so each Vercel Function entrypoint can share:
- * - a single Router instance (per function bundle)
- * - consistent RequestContext creation
- * - consistent error normalization + security headers
+ * Vercel handler factory.
  *
  * IMPORTANT:
- * - No business logic here.
- * - All route modules remain thin and BalanceGuard-wrapped.
+ * - Each surface gets its own Router to prevent route collisions.
+ * - Vercel file-based routing means:
+ *   - /api/site hits api/site.ts
+ *   - /api/site/* hits api/site/[...path].ts
+ * - We normalize /api/<surface>/<path> -> /<path> before routing.
  */
 
+import type { RequestContext } from "../../shared/logging/request-context.js";
+import { createRequestContext } from "../../shared/logging/request-context.js";
+import { runWithRequestContext } from "../../shared/logging/request-context.js";
 import { applySecurityHeaders } from "../../shared/http/headers.js";
-// import { jsonError } from "../../shared/http/responses.js";
-import { normalizeError } from "../../shared/errors/normalize-error.js";
-import { toHttpErrorResponse } from "../../shared/errors/http-error-response.js";
-import { createRequestContext, runWithRequestContext } from "../../shared/logging/request-context.js";
+import { jsonError } from "../../shared/http/responses.js";
 import { logger } from "../../shared/logging/logger.js";
 
 import { Router } from "./router.js";
@@ -26,84 +24,68 @@ import { registerAdminRoutes } from "./routes/admin.routes.js";
 
 type Surface = "site" | "client" | "admin";
 
-let _router: Router | undefined;
-
 /**
- * Lazily build the router once per function bundle.
- * This keeps cold-start work minimal while ensuring consistent route registration.
+ * Build a per-surface router. Avoid collisions like GET /health.
+ * This runs at module init in Vercel, so keep it deterministic and fast.
  */
-function getRouter(): Router {
-  if (_router) return _router;
-
+function buildRouter(surface: Surface): Router {
   const r = new Router();
-  registerSiteRoutes(r);
-  registerClientRoutes(r);
-  registerAdminRoutes(r);
-
-  _router = r;
+  if (surface === "site") registerSiteRoutes(r);
+  if (surface === "client") registerClientRoutes(r);
+  if (surface === "admin") registerAdminRoutes(r);
   return r;
 }
 
-function stripSurfacePrefix(req: Request, surface: Surface): Request {
-  const url = new URL(req.url);
-
-  const prefix = `/api/${surface}`;
-  if (url.pathname === prefix) {
-    url.pathname = "/";
-  } else if (url.pathname.startsWith(prefix + "/")) {
-    url.pathname = url.pathname.slice(prefix.length);
-  }
-
-  // Recreate the Request with the normalized URL
-  // (keep method/headers/body)
-  return new Request(url.toString(), req);
-}
-
+const routers: Record<Surface, Router> = {
+  site: buildRouter("site"),
+  client: buildRouter("client"),
+  admin: buildRouter("admin"),
+};
 
 /**
- * Build a Vercel Function handler that:
- * - creates a RequestContext
- * - runs within AsyncLocalStorage context
- * - calls the router
- * - applies security headers
- * - normalizes and safely returns errors
+ * Normalize incoming request path for a surface.
+ * - /api/site            -> /
+ * - /api/site/health     -> /health
+ * - /api/site/foo/bar    -> /foo/bar
  */
-export function makeVercelHandler(surface: Surface): (req: Request) => Promise<Response> {
-  const router = getRouter();
+function stripSurfacePrefix(req: Request, surface: Surface): Request {
+  const u = new URL(req.url);
+  const prefix = `/api/${surface}`;
+  if (u.pathname === prefix) {
+    u.pathname = "/";
+  } else if (u.pathname.startsWith(prefix + "/")) {
+    u.pathname = u.pathname.slice(prefix.length);
+  }
+  return new Request(u.toString(), req);
+}
 
-  return async (req: Request): Promise<Response> => {
-    const ctx = createRequestContext();
+export function makeVercelHandler(surface: Surface) {
+  const router = routers[surface];
 
-    return await runWithRequestContext(ctx, async () => {
-      try {
+  return async function handler(req: Request): Promise<Response> {
+    const ctx: RequestContext = createRequestContext({ surface });
 
-        const normalizedReq = stripSurfacePrefix(req, surface);
-      
-        logger.info(
-          { request_id: ctx.request_id, surface, method: req.method, url: req.url },
-          "http_request"
-        );
-        
-        const res = await router.handle(ctx, normalizedReq);
-        return applySecurityHeaders(res);
-        
-      } catch (err) {
-        const n = normalizeError(err);
+    // Establish ALS context synchronously, then run async work inside.
+    return runWithRequestContext(ctx, () => {
+      return (async () => {
+        try {
+          const normalizedReq = stripSurfacePrefix(req, surface);
 
-        logger.error(
-          {
-            request_id: ctx.request_id,
-            surface,
-            code: n.code,
-            status: n.status,
-            message: n.logMessage,
-            ...(n.details ? { details: n.details } : {}),
-          },
-          "http_error"
-        );
+          logger.info(
+            { request_id: ctx.request_id, surface, method: normalizedReq.method, url: normalizedReq.url },
+            "vercel_http_request"
+          );
 
-        return applySecurityHeaders(toHttpErrorResponse(ctx, n));
-      }
+          const res = await router.handle(ctx, normalizedReq);
+          return applySecurityHeaders(res);
+        } catch (err) {
+          logger.error(
+            { request_id: ctx.request_id, surface, message: err instanceof Error ? err.message : String(err) },
+            "vercel_http_error"
+          );
+          return applySecurityHeaders(jsonError(ctx, 500, "INTERNAL_ERROR", "Unexpected error"));
+        }
+      })();
     });
   };
 }
