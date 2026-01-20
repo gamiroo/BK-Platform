@@ -1,15 +1,20 @@
 // api/site.ts
 /**
- * Vercel Function entrypoint: Site surface API.
+ * Vercel Function entrypoint: Site surface API (root).
+ * Matches: /api/site
  *
- * Routes registered under site surface MUST be BalanceGuard-wrapped
- * with `surface: "site"` in their route module.
+ * IMPORTANT:
+ * Vercel expects Web Handler format: `export default { fetch() {} }`.
  */
-
 import { makeVercelHandler } from "../src/server/http/vercel-app.js";
 
-export const config = { runtime: "nodejs" };
+const handler = makeVercelHandler("site");
 
-export default makeVercelHandler("site");
+export default {
+  async fetch(request: Request): Promise<Response> {
+    return handler(request);
+  },
+};
+
 
 

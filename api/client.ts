@@ -1,10 +1,18 @@
 // api/client.ts
 /**
- * Vercel Function entrypoint: Client surface API.
+ * Vercel Function entrypoint: Client surface API (root).
+ * Matches: /api/client
+ *
+ * IMPORTANT:
+ * Vercel expects Web Handler format: `export default { fetch() {} }`.
  */
-
 import { makeVercelHandler } from "../src/server/http/vercel-app.js";
 
-export const config = { runtime: "nodejs" };
+const handler = makeVercelHandler("client");
 
-export default makeVercelHandler("client");
+export default {
+  async fetch(request: Request): Promise<Response> {
+    return handler(request);
+  },
+};
+
