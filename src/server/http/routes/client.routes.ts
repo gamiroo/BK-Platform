@@ -7,9 +7,17 @@ import { json } from "../../../shared/http/responses.js";
 
 export function registerClientRoutes(router: Router): void {
   router.get(
+    "/",
+    balanceguardClient(async (ctx) => {
+      return json(ctx, { surface: "client", status: "ok" });
+    })
+  );
+
+  router.get(
     "/health",
     balanceguardClient(async (ctx) => {
       return json(ctx, { surface: "client", status: "ok" });
     })
   );
 }
+

@@ -7,9 +7,17 @@ import { json } from "../../../shared/http/responses.js";
 
 export function registerAdminRoutes(router: Router): void {
   router.get(
+    "/",
+    balanceguardAdmin(async (ctx) => {
+      return json(ctx, { surface: "admin", status: "ok" });
+    })
+  );
+
+  router.get(
     "/health",
     balanceguardAdmin(async (ctx) => {
       return json(ctx, { surface: "admin", status: "ok" });
     })
   );
 }
+
