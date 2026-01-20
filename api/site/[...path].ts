@@ -9,8 +9,14 @@
  * We normalize `/api/site/<anything>` -> `/<anything>` before routing into the app router.
  */
 
+
+
 import { makeVercelHandler } from "../../src/server/http/vercel-app.js";
 
-export const config = { runtime: "nodejs" };
+const handler = makeVercelHandler("site");
 
-export default makeVercelHandler("site");
+export default {
+  async fetch(request: Request): Promise<Response> {
+    return handler(request);
+  },
+};
