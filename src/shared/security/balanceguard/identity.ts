@@ -16,7 +16,7 @@ import crypto from "node:crypto";
 
 import type { Actor, Surface } from "./types.js";
 import { createDb } from "../../db/client.js";
-import { loadRuntimeEnv } from "../../config/env.ts";
+import { loadRuntimeEnv } from "../../config/env.js";
 
 type SessionRow = Readonly<{
   user_id: string;
