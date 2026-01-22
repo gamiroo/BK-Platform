@@ -6,6 +6,7 @@
 > It is the source of truth for tables, columns, constraints, indexes, and invariants.
 >
 > The schema is designed to align with:
+>
 > - `balance.md`
 > - `balance_kitchen_business_model.md`
 > - `balance_kitchen_architecture.md`
@@ -28,6 +29,7 @@
 **ORM:** Drizzle (explicit SQL allowed)
 
 **General policy:**
+
 - Prefer **UUID primary keys** (`uuid`) for public-facing entities
 - Prefer **ULID** only if strictly needed for ordering by time; otherwise UUID
 - Use **immutable append-only ledgers** for financial/entitlement facts
@@ -46,11 +48,13 @@ Most tables MUST include:
 - `updated_at timestamptz not null default now()`
 
 Tables that require soft delete MUST include:
+
 - `deleted_at timestamptz null`
 
 ### 1.2 Request Correlation
 
 Tables that store actions or events SHOULD store:
+
 - `request_id uuid not null`
 
 `request_id` correlates the write to BalanceGuard request context.
@@ -58,6 +62,7 @@ Tables that store actions or events SHOULD store:
 ### 1.3 Actor Attribution
 
 Tables representing actions SHOULD store:
+
 - `actor_type text not null` (e.g., `system`, `admin`, `account_manager`, `client`)
 - `actor_user_id uuid null` (nullable for system)
 
@@ -79,6 +84,7 @@ Use `text` columns with CHECK constraints for enums (portable and Drizzle-friend
 Represents a person who can authenticate.
 
 Columns:
+
 - `id uuid pk`
 - `email text not null unique`
 - `email_verified_at timestamptz null`
@@ -87,6 +93,7 @@ Columns:
 - `created_at`, `updated_at`, `deleted_at`
 
 Indexes:
+
 - unique index on `lower(email)`
 
 ---
@@ -96,6 +103,7 @@ Indexes:
 Represents an owned customer account context.
 
 Columns:
+
 - `id uuid pk`
 - `account_type text not null` CHECK IN (`CUSTOMER`,`INTERNAL`)
 - `status text not null` CHECK IN (`ACTIVE`,`PAUSED`,`SUSPENDED`,`CLOSED`)
@@ -103,6 +111,7 @@ Columns:
 - `created_at`, `updated_at`, `deleted_at`
 
 Indexes:
+
 - index on `primary_user_id`
 
 ---
@@ -110,6 +119,7 @@ Indexes:
 ### 2.3 roles
 
 Columns:
+
 - `id uuid pk`
 - `key text not null unique` (e.g., `client`, `admin`, `account_manager`, `super_admin`)
 - `description text null`
@@ -122,6 +132,7 @@ Columns:
 Maps users to accounts with roles.
 
 Columns:
+
 - `id uuid pk`
 - `account_id uuid not null fk accounts(id)`
 - `user_id uuid not null fk users(id)`
@@ -129,9 +140,11 @@ Columns:
 - `created_at`, `updated_at`, `deleted_at`
 
 Constraints:
+
 - unique (`account_id`,`user_id`,`role_key`) where `deleted_at is null`
 
 Indexes:
+
 - index on `user_id`
 - index on `account_id`
 
@@ -144,6 +157,7 @@ Indexes:
 Opaque server-side session records.
 
 Columns:
+
 - `id uuid pk` (session_id)
 - `user_id uuid not null fk users(id)`
 - `surface text not null` CHECK IN (`client`,`admin`)
@@ -160,9 +174,11 @@ Columns:
 - `ip_created inet null`
 
 Constraints:
+
 - `revoked_at is null OR revoked_at <= now()` (informational)
 
 Indexes:
+
 - index on (`user_id`,`surface`,`revoked_at`)
 - index on `expires_at`
 
@@ -173,6 +189,7 @@ Indexes:
 ### 4.1 enquiries
 
 Columns:
+
 - `id uuid pk`
 - `request_id uuid not null`
 - `name text null`
@@ -184,6 +201,7 @@ Columns:
 - `created_at`, `updated_at`
 
 Indexes:
+
 - index on `status`
 - index on `assigned_to_user_id`
 
@@ -196,6 +214,7 @@ Indexes:
 Stores current preferences snapshot; effect timing enforced by Subscriptions/Ordering policy.
 
 Columns:
+
 - `id uuid pk`
 - `account_id uuid not null fk accounts(id)`
 - `request_id uuid not null`
@@ -205,9 +224,11 @@ Columns:
 - `created_at`, `updated_at`
 
 Constraints:
+
 - unique (`account_id`) where `deleted_at is null` (one active record)
 
 Indexes:
+
 - index on `account_id`
 
 ---
@@ -219,12 +240,14 @@ Indexes:
 Maps internal account to Stripe customer.
 
 Columns:
+
 - `id uuid pk`
 - `account_id uuid not null fk accounts(id)`
 - `stripe_customer_id text not null unique`
 - `created_at`, `updated_at`
 
 Constraints:
+
 - unique (`account_id`)
 
 ---
@@ -234,6 +257,7 @@ Constraints:
 Raw Stripe webhooks (idempotency + audit).
 
 Columns:
+
 - `id uuid pk`
 - `request_id uuid not null`
 - `stripe_event_id text not null unique`
@@ -246,6 +270,7 @@ Columns:
 - `failure_reason text null`
 
 Indexes:
+
 - index on `process_status`
 - index on `received_at`
 
@@ -256,6 +281,7 @@ Indexes:
 Canonical billing facts derived from Stripe.
 
 Columns:
+
 - `id uuid pk`
 - `request_id uuid not null`
 - `account_id uuid not null fk accounts(id)`
@@ -269,9 +295,11 @@ Columns:
 - `created_at`, `updated_at`
 
 Constraints:
+
 - unique (`stripe_object_type`,`stripe_object_id`,`kind`)
 
 Indexes:
+
 - index on (`account_id`,`occurred_at`)
 
 ---
@@ -283,6 +311,7 @@ Indexes:
 Catalog of pack SKUs.
 
 Columns:
+
 - `id uuid pk`
 - `sku text not null unique`
 - `title text not null`
@@ -299,6 +328,7 @@ Columns:
 Customer-owned packs.
 
 Columns:
+
 - `id uuid pk`
 - `request_id uuid not null`
 - `account_id uuid not null fk accounts(id)`
@@ -311,9 +341,11 @@ Columns:
 - `created_at`, `updated_at`
 
 Constraints:
+
 - `locked_credits_remaining = meals_remaining` (v1 invariant; may evolve)
 
 Indexes:
+
 - index on (`account_id`,`status`)
 
 ---
@@ -323,6 +355,7 @@ Indexes:
 Append-only events for pack lifecycle.
 
 Columns:
+
 - `id uuid pk`
 - `request_id uuid not null`
 - `account_id uuid not null fk accounts(id)`
@@ -341,6 +374,7 @@ Columns:
 - `created_at timestamptz not null default now()`
 
 Indexes:
+
 - index on (`pack_id`,`created_at`)
 
 ---
@@ -350,6 +384,7 @@ Indexes:
 ### 8.1 subscription_plans
 
 Columns:
+
 - `id uuid pk`
 - `key text not null unique`
 - `title text not null`
@@ -361,6 +396,7 @@ Columns:
 ### 8.2 subscriptions
 
 Columns:
+
 - `id uuid pk`
 - `request_id uuid not null`
 - `account_id uuid not null fk accounts(id)`
@@ -374,6 +410,7 @@ Columns:
 - `created_at`, `updated_at`
 
 Indexes:
+
 - index on (`account_id`,`status`)
 
 ---
@@ -383,6 +420,7 @@ Indexes:
 Monthly capability counters and flags.
 
 Columns:
+
 - `id uuid pk`
 - `request_id uuid not null`
 - `subscription_id uuid not null fk subscriptions(id)`
@@ -396,9 +434,11 @@ Columns:
 - `created_at`, `updated_at`
 
 Constraints:
+
 - unique (`subscription_id`,`period_start`)
 
 Indexes:
+
 - index on (`subscription_id`,`period_start`)
 
 ---
@@ -410,6 +450,7 @@ Indexes:
 Defines canonical week identity.
 
 Columns:
+
 - `id uuid pk`
 - `week_key text not null unique` (e.g., `2026-W03`)
 - `window_opens_at timestamptz not null`
@@ -424,6 +465,7 @@ Columns:
 One order per account per week.
 
 Columns:
+
 - `id uuid pk`
 - `request_id uuid not null`
 - `account_id uuid not null fk accounts(id)`
@@ -436,9 +478,11 @@ Columns:
 - `created_at`, `updated_at`
 
 Constraints:
+
 - unique (`account_id`,`week_id`)
 
 Indexes:
+
 - index on (`account_id`,`status`)
 
 ---
@@ -446,6 +490,7 @@ Indexes:
 ### 9.3 order_lines
 
 Columns:
+
 - `id uuid pk`
 - `order_id uuid not null fk orders(id) on delete cascade`
 - `dish_id uuid not null` (future FK to meals/dishes table)
@@ -453,6 +498,7 @@ Columns:
 - `created_at`, `updated_at`
 
 Indexes:
+
 - index on `order_id`
 
 ---
@@ -462,12 +508,14 @@ Indexes:
 Canonical preset resolution stored at confirmation.
 
 Columns:
+
 - `id uuid pk`
 - `order_id uuid not null fk orders(id) on delete cascade`
 - `allocation_json jsonb not null`
 - `created_at`, `updated_at`
 
 Constraints:
+
 - unique (`order_id`)
 
 ---
@@ -477,6 +525,7 @@ Constraints:
 Append-only order events.
 
 Columns:
+
 - `id uuid pk`
 - `request_id uuid not null`
 - `order_id uuid not null fk orders(id)`
@@ -489,6 +538,7 @@ Columns:
 - `created_at timestamptz not null default now()`
 
 Indexes:
+
 - index on (`order_id`,`created_at`)
 
 ---
@@ -500,6 +550,7 @@ Indexes:
 Append-only ledger.
 
 Columns:
+
 - `id uuid pk`
 - `request_id uuid not null`
 - `account_id uuid not null fk accounts(id)`
@@ -512,10 +563,12 @@ Columns:
 - `created_at timestamptz not null default now()`
 
 Indexes:
+
 - index on (`account_id`,`credit_class`,`created_at`)
 - index on `expires_at`
 
 Notes:
+
 - LOCKED credits are primarily represented by `packs.locked_credits_remaining` in v1, but the ledger is authoritative once implemented.
 
 ---
@@ -527,6 +580,7 @@ Notes:
 Per-account item inventory.
 
 Columns:
+
 - `id uuid pk`
 - `request_id uuid not null`
 - `account_id uuid not null fk accounts(id)`
@@ -544,6 +598,7 @@ Columns:
 - `created_at`, `updated_at`
 
 Indexes:
+
 - index on (`account_id`,`item_type`,`status`)
 
 ---
@@ -553,6 +608,7 @@ Indexes:
 Append-only events for purchase/issue/redeem.
 
 Columns:
+
 - `id uuid pk`
 - `request_id uuid not null`
 - `account_id uuid not null fk accounts(id)`
@@ -570,6 +626,7 @@ Columns:
 - `created_at timestamptz not null default now()`
 
 Indexes:
+
 - index on (`reward_item_id`,`created_at`)
 
 ---
@@ -581,6 +638,7 @@ Indexes:
 Records operational disruption incidents.
 
 Columns:
+
 - `id uuid pk`
 - `request_id uuid not null`
 - `category text not null` CHECK IN (
@@ -600,6 +658,7 @@ Columns:
 - `created_at`, `updated_at`
 
 Indexes:
+
 - index on `category`
 - index on `status`
 
@@ -610,6 +669,7 @@ Indexes:
 Records responses applied under policy.
 
 Columns:
+
 - `id uuid pk`
 - `request_id uuid not null`
 - `failure_id uuid not null fk operational_failures(id)`
@@ -622,6 +682,7 @@ Columns:
 - `created_at timestamptz not null default now()`
 
 Indexes:
+
 - index on (`failure_id`,`created_at`)
 
 ---
@@ -633,6 +694,7 @@ Indexes:
 Single-stream audit for security/business actions.
 
 Columns:
+
 - `id uuid pk`
 - `request_id uuid not null`
 - `event_type text not null`
@@ -645,6 +707,7 @@ Columns:
 - `created_at timestamptz not null default now()`
 
 Indexes:
+
 - index on (`event_type`,`created_at`)
 - index on (`account_id`,`created_at`)
 
@@ -675,10 +738,10 @@ These are intentionally not fully defined until their module specs are canonical
 This schema encodes the **economic and operational invariants** of Balance Kitchen.
 
 It is designed to be:
+
 - secure
 - auditable
 - future-proof
 - resistant to entitlement drift
 
 Any implementation that bypasses these constraints is invalid by definition.
-

@@ -42,6 +42,9 @@ export type RuntimeEnv = Readonly<{
   REDIS_URL?: string;
   LOG_LEVEL?: LogLevel;
   VERCEL_ENV?: NonNullable<Env["VERCEL_ENV"]>;
+  CORS_SITE_ORIGINS?: string;
+  CORS_CLIENT_ORIGINS?: string;
+  CORS_ADMIN_ORIGINS?: string;
 }>;
 
 /**
@@ -120,17 +123,26 @@ export function loadRuntimeEnv(): RuntimeEnv {
   const REDIS_URL = parseRedisUrl(optionalEnv("REDIS_URL"));
   const LOG_LEVEL = parseLogLevel(optionalEnv("LOG_LEVEL"));
   const VERCEL_ENV = parseVercelEnv(optionalEnv("VERCEL_ENV"));
+  const CORS_SITE_ORIGINS = optionalEnv("CORS_SITE_ORIGINS");
+  const CORS_CLIENT_ORIGINS = optionalEnv("CORS_CLIENT_ORIGINS");
+  const CORS_ADMIN_ORIGINS = optionalEnv("CORS_ADMIN_ORIGINS");
 
   const out: {
     NODE_ENV: Env["NODE_ENV"];
     REDIS_URL?: string;
     LOG_LEVEL?: LogLevel;
     VERCEL_ENV?: NonNullable<Env["VERCEL_ENV"]>;
+    CORS_SITE_ORIGINS?: string;
+    CORS_CLIENT_ORIGINS?: string;
+    CORS_ADMIN_ORIGINS?: string;
   } = { NODE_ENV };
 
   if (REDIS_URL !== undefined) out.REDIS_URL = REDIS_URL;
   if (LOG_LEVEL !== undefined) out.LOG_LEVEL = LOG_LEVEL;
   if (VERCEL_ENV !== undefined) out.VERCEL_ENV = VERCEL_ENV;
+  if (CORS_SITE_ORIGINS !== undefined) out.CORS_SITE_ORIGINS = CORS_SITE_ORIGINS;
+  if (CORS_CLIENT_ORIGINS !== undefined) out.CORS_CLIENT_ORIGINS = CORS_CLIENT_ORIGINS;
+  if (CORS_ADMIN_ORIGINS !== undefined) out.CORS_ADMIN_ORIGINS = CORS_ADMIN_ORIGINS;
 
   return out;
 }
