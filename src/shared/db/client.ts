@@ -14,7 +14,7 @@
 
 import postgres, { type Sql } from "postgres";
 import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
-import { loadEnv } from "../config/env.ts";
+import { loadEnv } from "../config/env.js";
 
 export type Db = PostgresJsDatabase;
 
