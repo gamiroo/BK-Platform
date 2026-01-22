@@ -1,5 +1,5 @@
 // src/frontend/site/src/views/layout/shell.ts
-import { mustClass } from "@/frontend/shared/css-modules.js";
+import { mustClass } from "../../../../../frontend/shared/css-modules.js";
 import { el } from "../../shared/dom.js";
 import styles from "./shell.module.css";
 

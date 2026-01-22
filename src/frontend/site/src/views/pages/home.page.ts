@@ -1,4 +1,4 @@
-import { mustClass } from "@/frontend/shared/css-modules.js";
+import { mustClass } from "../../../../shared/css-modules.js";
 import { el } from "../../shared/dom.js";
 import { renderShell } from "../layout/shell.js";
 import styles from "./home.module.css";
