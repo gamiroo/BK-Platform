@@ -21,3 +21,4 @@ export function registerClientRoutes(router: Router): void {
     })
   );
 }
+

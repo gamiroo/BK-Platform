@@ -21,3 +21,4 @@ export function registerAdminRoutes(router: Router): void {
     })
   );
 }
+
