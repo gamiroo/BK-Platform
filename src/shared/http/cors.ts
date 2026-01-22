@@ -18,7 +18,7 @@
  */
 
 import type { Surface } from "../security/balanceguard/types.js";
-import { loadRuntimeEnv } from "../config/env.ts";
+import { loadRuntimeEnv } from "../config/env.js";
 
 type CorsDecision = Readonly<{
   allowed: boolean;

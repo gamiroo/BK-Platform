@@ -31,6 +31,20 @@ function wrapHandler(handler: SurfaceHandler | CtxOnlyHandler): BalanceGuardHand
 
 type RateLimitPolicy = Readonly<{ max: number; windowMs: number }>;
 
+type WrapperRateLimit = Readonly<{
+  max: number;
+  windowMs: number;
+  routeKey?: (req: Request) => string;
+}>;
+
+type WrapperOpts = Readonly<{
+  requireOrigin?: boolean;
+  requireCsrf?: boolean;
+  requireAuth?: boolean;
+  rateLimit?: WrapperRateLimit;
+}>;
+
+
 function policyForSurface(surface: Surface): RateLimitPolicy {
   switch (surface) {
     case "site":
@@ -46,16 +60,22 @@ function policyForSurface(surface: Surface): RateLimitPolicy {
   }
 }
 
-function makeOpts(surface: Surface, store: RateLimitStore): BalanceGuardOptions {
+type BaseGuardOptions = Omit<BalanceGuardOptions, "requireOrigin" | "requireCsrf" | "requireAuth"> & Readonly<{
+  requireOrigin: boolean;
+  requireCsrf: boolean;
+  requireAuth: boolean;
+}>;
+
+
+function makeOpts(surface: Surface, store: RateLimitStore): BaseGuardOptions {
   const p = policyForSurface(surface);
 
-  const out: BalanceGuardOptions = {
+  const out: BaseGuardOptions = {
     surface,
     requireOrigin: surface !== "site",
     requireCsrf: surface !== "site",
 
     // IMPORTANT: Day 0 default is public-friendly.
-    // Routes that require auth must opt-in explicitly later.
     requireAuth: false,
 
     rateLimit: {
@@ -68,11 +88,56 @@ function makeOpts(surface: Surface, store: RateLimitStore): BalanceGuardOptions 
   return out;
 }
 
+
 function makeSurfaceWrapper(surface: Surface) {
   const store = getHttpRateLimitStore();
 
-  return (handler: SurfaceHandler | CtxOnlyHandler): BalanceGuardHandler => {
-    return balanceguard(makeOpts(surface, store), wrapHandler(handler));
+  function withDefaults(partial?: WrapperOpts): BalanceGuardOptions {
+    const base = makeOpts(surface, store);
+
+    const requireOrigin = partial?.requireOrigin ?? base.requireOrigin;
+    const requireCsrf = partial?.requireCsrf ?? base.requireCsrf;
+    const requireAuth = partial?.requireAuth ?? base.requireAuth;
+
+    // Build rateLimit in an exactOptionalPropertyTypes-safe way:
+    // - undefined => use base.rateLimit
+    // - object => override with new max/windowMs/etc
+    // - explicitly omitted/falsey never happens (WrapperOpts enforces shape)
+    const computedRateLimit =
+      partial?.rateLimit === undefined
+        ? base.rateLimit
+        : partial.rateLimit
+          ? { store, ...partial.rateLimit }
+          : undefined;
+
+    // IMPORTANT:
+    // - Do NOT set rateLimit: undefined
+    // - Do NOT mutate resolveActor on a Readonly object
+    const out: BalanceGuardOptions = {
+      surface: base.surface,
+      requireOrigin,
+      requireCsrf,
+      requireAuth,
+      ...(computedRateLimit ? { rateLimit: computedRateLimit } : {}),
+      ...(base.resolveActor ? { resolveActor: base.resolveActor } : {}),
+    };
+
+    return out;
+  }
+
+  // overloads
+  return (a: WrapperOpts | SurfaceHandler | CtxOnlyHandler, b?: SurfaceHandler | CtxOnlyHandler): BalanceGuardHandler => {
+    // (handler)
+    if (typeof a === "function") {
+      return balanceguard(withDefaults(), wrapHandler(a));
+    }
+
+    // (opts, handler)
+    const opts = a;
+    const handler = b;
+    if (!handler) throw new Error("balanceguard wrapper requires (opts, handler)");
+
+    return balanceguard(withDefaults(opts), wrapHandler(handler));
   };
 }
 

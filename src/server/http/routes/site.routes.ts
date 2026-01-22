@@ -8,7 +8,7 @@ import { balanceguardSite } from "../../../shared/security/balanceguard/wrappers
 import { json } from "../../../shared/http/responses.js";
 import { normalizeError } from "../../../shared/errors/normalize-error.js";
 import { toHttpErrorResponse } from "../../../shared/errors/http-error-response.js";
-
+import { applyCorsHeaders, preflightResponse  } from "../../../shared/http/cors.js";
 import { createDb } from "../../../shared/db/client.js";
 import {
   readDbEnvMarker,
@@ -18,7 +18,6 @@ import {
 } from "../../../shared/db/env-marker.js";
 
 import { submitEnquiry, validateEnquiryInput } from "../../../modules/enquiry/application/submit-enquiry.js";
-import { AppError } from "../../../shared/errors/app-error.js";
 
 function methodNotAllowed(ctx: RequestContext): Response {
   return toHttpErrorResponse(
@@ -30,6 +29,7 @@ function methodNotAllowed(ctx: RequestContext): Response {
 }
 
 export function registerSiteRoutes(router: Router): void {
+
   router.get(
     "/health",
     balanceguardSite(async (ctx: RequestContext) => {
@@ -46,51 +46,31 @@ export function registerSiteRoutes(router: Router): void {
     })
   );
 
+  router.options("/enquiry", async (_ctx: RequestContext, req: Request) => {
+    return preflightResponse("site", req);
+  });
+
   router.post(
     "/enquiry",
-    balanceguardSite(async (ctx, req) => {
-      let raw: unknown;
-      try {
-        raw = await req.json();
-      } catch {
-        throw new AppError({
-          code: "VALIDATION_FAILED",
-          status: 400,
-          message: "Invalid JSON body",
-        });
-      }
-
-      const input = validateEnquiryInput(raw);
-      const out = await submitEnquiry(input);
-
-      return json(ctx, { lead_id: out.leadId });
-    })
-  );
-
-  // ✅ Preflight for enquiry (must exist)
-  router.options(
-    "/enquiry",
     balanceguardSite(
-      async (ctx: RequestContext, req: Request) => {
-        // applyCors should set:
-        // - Access-Control-Allow-Origin
-        // - Access-Control-Allow-Methods
-        // - Access-Control-Allow-Headers
-        // - Access-Control-Allow-Credentials (if you use cookies)
-        const res = new Response(null, { status: 204 });
-        return applyCors(req, "site", res);
-      },
       {
-        // IMPORTANT: preflight should not require origin/auth/csrf, just CORS
-        requireOrigin: false,
+        requireOrigin: true,
         requireCsrf: false,
         requireAuth: false,
-        rateLimit: undefined,
+        rateLimit: { max: 10, windowMs: 60_000 },
+      },
+      async (ctx: RequestContext, req: Request) => {
+        const raw = await req.json().catch(() => null);
+        const input = validateEnquiryInput(raw);
+        const out = await submitEnquiry(input);
+
+        const res = json(ctx, { lead_id: out.leadId });
+        return applyCorsHeaders("site", req, res);
       }
     )
   );
 
-
+  
   router.get(
     "/",
     balanceguardSite(async (ctx: RequestContext) => {

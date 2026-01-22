@@ -10,8 +10,8 @@
  * - We normalize /api/<surface>/<path> -> /<path> before routing.
  *
  * CORS:
- * - We must respond to OPTIONS preflights for cross-origin fetch.
- * - We must attach Access-Control-* headers to ALL responses (including errors).
+ * - Must respond to OPTIONS preflights for cross-origin fetch.
+ * - Must attach Access-Control-* headers to ALL responses (including errors/404s).
  */
 
 import type { RequestContext } from "../../shared/logging/request-context.js";
@@ -28,10 +28,6 @@ import { registerAdminRoutes } from "./routes/admin.routes.js";
 
 type Surface = "site" | "client" | "admin";
 
-/**
- * Build a per-surface router. Avoid collisions like GET /health.
- * This runs at module init in Vercel, so keep it deterministic and fast.
- */
 function buildRouter(surface: Surface): Router {
   const r = new Router();
   if (surface === "site") registerSiteRoutes(r);
@@ -46,12 +42,6 @@ const routers: Record<Surface, Router> = {
   admin: buildRouter("admin"),
 };
 
-/**
- * Normalize incoming request path for a surface.
- * - /api/site            -> /
- * - /api/site/health     -> /health
- * - /api/site/foo/bar    -> /foo/bar
- */
 function stripSurfacePrefix(req: Request, surface: Surface): Request {
   const u = new URL(req.url);
   const prefix = `/api/${surface}`;
@@ -62,7 +52,6 @@ function stripSurfacePrefix(req: Request, surface: Surface): Request {
     u.pathname = u.pathname.slice(prefix.length);
   }
 
-  // Preserve method/headers/body/etc
   return new Request(u.toString(), req);
 }
 
@@ -74,7 +63,6 @@ export function makeVercelHandler(surface: Surface) {
 
     return runWithRequestContext(ctx, () => {
       return (async () => {
-        // Normalize early so even errors/preflight get correct CORS + logs
         const normalizedReq = stripSurfacePrefix(req, surface);
 
         try {
@@ -83,22 +71,20 @@ export function makeVercelHandler(surface: Surface) {
             "vercel_http_request"
           );
 
+          // ✅ Preflight MUST short-circuit BEFORE routing/BalanceGuard.
           const preflight = handlePreflight(normalizedReq, surface);
           if (preflight) {
+            // preflight already has CORS headers; still apply security headers
             return applySecurityHeaders(preflight);
           }
 
-          let res: Response;
+          // Route normally (BalanceGuard is applied inside the route handlers)
+          let res = await router.handle(ctx, normalizedReq);
 
-          // ✅ CORS preflight must short-circuit BEFORE routing/BalanceGuard
-          if (normalizedReq.method.toUpperCase() === "OPTIONS") {
-            res = new Response(null, { status: 204 });
-          } else {
-            res = await router.handle(ctx, normalizedReq);
-          }
-
-          // ✅ ALWAYS apply CORS headers, then security headers
+          // ✅ Always apply CORS to all responses (including 404s)
           res = applyCors(normalizedReq, surface, res);
+
+          // ✅ Then apply security headers
           res = applySecurityHeaders(res);
 
           return res;
@@ -108,7 +94,7 @@ export function makeVercelHandler(surface: Surface) {
             "vercel_http_error"
           );
 
-          // ✅ Even error responses must get CORS headers
+          // ✅ Even error responses must have CORS headers
           let res = jsonError(ctx, 500, "INTERNAL_ERROR", "Unexpected error");
           res = applyCors(normalizedReq, surface, res);
           res = applySecurityHeaders(res);
