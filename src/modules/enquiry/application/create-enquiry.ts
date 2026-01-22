@@ -10,8 +10,8 @@
 
 import { AppError } from "../../../shared/errors/app-error.js";
 import { createDb } from "../../../shared/db/client.js";
-import { createZohoLead } from "../../../shared/infra/zoho/crm.ts";
-import { loadZohoEnv } from "../../../shared/infra/zoho/env.ts";
+import { createZohoLead } from "../../../shared/infra/zoho/crm.js";
+import { loadZohoEnv } from "../../../shared/infra/zoho/env.js";
 
 export type CreateEnquiryInput = Readonly<{
   name: string;
@@ -57,7 +57,7 @@ export async function createEnquiry(input: CreateEnquiryInput): Promise<{ id: st
 
     await h.sql`
       update enquiries
-      set zoho_sync_status = 'ok',
+      set zoho_sync_status = 'synced',
           zoho_lead_id = ${lead.leadId},
           zoho_synced_at = now(),
           zoho_last_error = null
