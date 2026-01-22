@@ -64,6 +64,23 @@ Balance Kitchen has **three primary user-facing surfaces**:
     - enquiries
     - **public chat widget (anonymous, rate-limited)**
 
+### Temporary External Services (Site Surface)
+
+For the initial public release, BK uses external Zoho services as temporary infrastructure:
+
+- **Zoho CRM (Leads)** receives marketing enquiries from the site via the BK API.
+- **Zoho Chat widget** is used for public-site chat.
+
+These are **temporary** and will be replaced by internal modules:
+
+- **BalanceCRM** (internal enquiry + lead + pipeline management)
+- **BalanceChat** (internal realtime chat platform)
+
+Integration rule (non-negotiable):
+
+- The **site frontend never talks to Zoho directly**.
+- All Zoho communication is **server-side only** via the `api` surface.
+
 - **client** — authenticated client dashboard
 - **admin** — authenticated admin / staff dashboard
 
@@ -118,6 +135,116 @@ Canonical example topology:
 - `https://api.<domain>`    → backend HTTP API
 - `wss://api.<domain>`      → backend WebSockets
 
+#### 2.3.1 Vercel Implementation (Canonical)
+
+BK’s canonical deployment uses **4 Vercel projects** that map 1:1 to the architecture surfaces:
+
+- `site`   — Vite build (static)
+- `client` — Vite build (static)
+- `admin`  — Vite build (static)
+- `api`    — Vercel Serverless Functions (Node.js)
+
+##### 2.3.1.1 Environment Variables & Secrets (Canonical)
+
+Rule: **all secrets live in the `api` project only**.
+
+- `site`, `client`, `admin` are static frontends and MUST NOT contain secrets.
+- Server-only credentials (DB, Redis, third-party OAuth/CRM, Stripe secrets) MUST be set on:
+  - Vercel Project: `api`
+  - Environment scopes as appropriate (Production vs Preview)
+
+Examples of **server-only secrets** (api project only):
+
+- `DATABASE_URL`
+- `REDIS_URL`
+- `ZOHO_CLIENT_ID`, `ZOHO_CLIENT_SECRET`, `ZOHO_REFRESH_TOKEN`, `ZOHO_DATA_CENTER`
+- Stripe secret keys + webhook secrets (when billing is enabled)
+
+##### 2.3.1.2 Vercel Projects (Declared & Locked)
+
+Balance Kitchen uses **exactly four (4) Vercel projects**, each mapped 1:1 to a system surface.
+
+These projects are **already provisioned and active**.
+
+| Vercel Project | Git Branch | Responsibility |
+| ---------------- | ----------- | ---------------- |
+| `site` | `main` | Public marketing site (static Vite build) |
+| `client` | `main` | Authenticated client dashboard (static Vite build) |
+| `admin` | `main` | Authenticated admin dashboard (static Vite build) |
+| `api` | `main` | Backend HTTP + WebSocket API (Serverless Functions) |
+
+Rules (locked):
+
+- All four projects deploy **from `main` only**
+- CI must pass before deployment
+- Each project has **isolated environment variables**
+- Only the `api` project may contain secrets
+- Frontend projects (`site`, `client`, `admin`) are static and secret-free
+
+This deployment topology is **canonical** and must not be altered without an explicit architecture revision.
+
+### Zoho CRM (Temporary — until BalanceCRM)
+
+Balance Kitchen integrates with **Zoho CRM** for **initial website enquiries only**.
+
+**Scope:**
+
+- Module: `enquiry`
+- Object: `Leads`
+- Purpose: capture inbound marketing enquiries prior to account creation
+
+**Operational Rules:**
+
+- Enquiry submission is **fail-closed**
+  - If Zoho write fails, the enquiry is rejected
+  - No local persistence or retry queue is used at this stage
+- Minimal fields are sent:
+  - `Last_Name` (required by Zoho)
+  - `Email`
+  - `Lead_Source`
+  - `Description` (free-text message)
+
+**Authentication:**
+
+- OAuth2 refresh-token flow
+- Access token cached in-memory per runtime instance
+- Cold starts safely re-refresh tokens
+
+**Runtime Placement:**
+
+- Executed server-side only
+- Secrets are stored in the **api** runtime environment only
+- No Zoho credentials are exposed to frontend surfaces
+
+**Temporary Integration Notice**
+Zoho CRM is a **temporary external dependency**.
+It will be replaced by **BalanceCRM** once the internal CRM bounded context is implemented.
+No domain logic may depend on Zoho-specific response shapes or field semantics.
+
+Frontend projects may only hold non-sensitive “public configuration” such as:
+
+- API base URL
+- surface origin URLs
+- feature flags safe to expose
+
+Local development:
+
+- `.env.local` may include secrets only for local runs.
+- Never commit `.env.local`.
+
+Critical runtime invariant (Vercel Functions):
+
+- API entrypoints MUST use Web Handler export format:
+  - `export default { async fetch(request) { return Response } }`
+
+This is required to ensure requests always terminate correctly in the Vercel runtime.
+A wrong handler shape can lead to functions hanging and timing out.
+
+The API surface is purely HTTP/WS and must not serve SPA assets in production.
+Frontends remain independent static deployments.
+
+---
+
 ### 2.4 Cross-Origin Contract (Mandatory)
 
 Because frontends and backend are cross-origin:
@@ -148,6 +275,15 @@ Balance Kitchen chat spans multiple surfaces with distinct trust models.
 - Used for new customer interactions
 - Must be aggressively rate-limited
 - May be stored as an admin inbox message when offline
+
+**Temporary Chat Notice (Zoho SalesIQ / Zoho Chat)**
+The marketing site may embed Zoho’s chat widget as a **temporary** solution for public enquiries and live support.
+
+Rules:
+
+- The widget is UI-only (no secrets in the site build)
+- It must not become a dependency for core product workflows or identity
+- It will be replaced by **BalanceChat** once the internal chat system is implemented
 
 Guest session (site widget):
 

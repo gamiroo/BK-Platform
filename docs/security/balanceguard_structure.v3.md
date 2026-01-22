@@ -3,6 +3,7 @@
 > **Canonical implementation map** for BalanceGuard v3.
 >
 > This document is the source of truth for:
+>
 > - where BalanceGuard and WSGuard code lives
 > - what each file is responsible for
 > - strict dependency direction (import rules)
@@ -15,6 +16,7 @@
 ## 0. Relationship to Other Canonical Docs
 
 This file complements:
+
 - `balanceguard.md` (v3) — **WHAT** must be enforced
 - `balanceguard_compliance_routes.md` (v3) — **HOW** routes must be written
 - `balance_kitchen_architecture.md` — DDD boundaries + transport rules
@@ -92,6 +94,7 @@ src/shared/config/
 ```
 
 Notes:
+
 - `balanceguard/` contains HTTP orchestration and shared primitives.
 - `wsguard/` contains WebSocket enforcement and mirrors the HTTP pipeline.
 - Upload handling is isolated under `balanceguard/uploads/` to keep multipart logic out of route handlers.
@@ -103,6 +106,7 @@ Notes:
 ### 3.1 Allowed Imports (Security Layer)
 
 `src/shared/security/**` MAY import:
+
 - `src/shared/http/**` (headers, cors, responses)
 - `src/shared/logging/**` (request context, security logger)
 - `src/shared/errors/**` (error normalization helpers)
@@ -113,6 +117,7 @@ Notes:
 ### 3.2 Forbidden Imports
 
 `src/shared/security/**` MUST NOT import from:
+
 - `src/modules/**`
 - `src/server/**` (no coupling to server runtime wiring)
 - `src/frontend/**`
@@ -168,6 +173,7 @@ type BalanceGuardOptions = {
 ```
 
 Notes:
+
 - `origin.sensitive` is used for sensitive GETs returning protected data.
 - `body.maxBytes` is enforced before parsing.
 
@@ -203,11 +209,13 @@ No step may be skipped.
 **Role:** Orchestrator.
 
 MUST:
+
 - enforce canonical pipeline order
 - pass `RequestContext` to handler
 - ensure all responses include `request_id`
 
 MUST NOT:
+
 - parse JSON bodies
 - perform domain logic
 - call `src/modules/**`
@@ -217,6 +225,7 @@ MUST NOT:
 **Role:** Construct request-scoped context.
 
 MUST:
+
 - generate `request_id`
 - capture `ip`, `userAgent`, `path`, `method`, `surface`
 - provide request logger with redaction hooks
@@ -226,11 +235,13 @@ MUST:
 **Role:** Security error factory.
 
 MUST:
+
 - define canonical security error codes (from `balanceguard.md`)
 - map codes to HTTP status
 - produce safe messages
 
 MUST NOT:
+
 - include stack traces in output
 
 ### 6.4 `identity.ts`
@@ -238,12 +249,14 @@ MUST NOT:
 **Role:** Actor resolution.
 
 MUST:
+
 - read session cookie (opaque id) via `session-cookie.ts`
 - load session via `sessions.ts`
 - enforce expiry, revocation, surface match
 - return Actor with roles + authLevel
 
 MUST NOT:
+
 - apply route authorization
 
 ### 6.5 `sessions.ts`
@@ -275,6 +288,7 @@ type SessionsStore = {
 ```
 
 Notes:
+
 - The implementation may be DB-backed (canonical) and MAY use a cache.
 - Enforcing concurrent session limits belongs to the *auth use-cases* and/or session creation logic, not BalanceGuard.
 
@@ -283,11 +297,13 @@ Notes:
 **Role:** Cookie I/O.
 
 MUST:
+
 - read/write **opaque** session IDs
 - set correct attributes per surface + env
 - clear cookies on logout
 
 MUST NOT:
+
 - encode identity claims
 
 ### 6.7 `authz.ts`
@@ -295,6 +311,7 @@ MUST NOT:
 **Role:** Route-level enforcement.
 
 MUST:
+
 - enforce `auth.required`
 - enforce `auth.roles` intersection
 - enforce minimum `auth.aal` (AAL)
@@ -304,6 +321,7 @@ MUST:
 **Role:** IP extraction and normalization.
 
 MUST:
+
 - support trusted proxy configuration
 - return a normalized IP string
 
@@ -312,6 +330,7 @@ MUST:
 **Role:** Origin allowlist enforcement.
 
 MUST:
+
 - enforce Origin for any route with `origin.required = true`
 - support sensitive GET policy via `origin.sensitive = true`
 
@@ -320,6 +339,7 @@ MUST:
 **Role:** CSRF enforcement.
 
 MUST:
+
 - enforce CSRF for all state-changing session routes when enabled
 - support double-submit cookie strategy
 
@@ -328,6 +348,7 @@ MUST:
 **Role:** Rate limiting (steady + burst).
 
 MUST:
+
 - enforce steady limits (`windowMs`, `max`)
 - implement optional burst token bucket (`rate`, `capacity`)
 - emit structured security events
@@ -336,21 +357,43 @@ MUST expose store adapter interface:
 
 ```ts
 type RateLimitStore = {
-  incr(key: string, windowMs: number, now: number): Promise<{ count: number; resetAt: number }>;
-  takeTokens?(key: string, rate: number, capacity: number, now: number): Promise<{ allowed: boolean; remaining: number }>;
+  /**
+   * Fixed-window increment.
+   *
+   * Returns the new count for the window and the window reset timestamp (ms).
+   */
+  incrFixedWindow(
+    key: string,
+    windowMs: number,
+    nowMs: number
+  ): Promise<{ count: number; resetAtMs: number }>;
+
+  /**
+   * Optional burst limiter (token bucket) for high-risk surfaces/routes.
+   * Not required for Day 0, but the interface is reserved here for forward compatibility.
+   */
+  takeTokens?(
+    key: string,
+    rate: number,
+    capacity: number,
+    nowMs: number
+  ): Promise<{ allowed: boolean; remaining: number }>;
 };
 ```
 
 ### 6.12 Upload Security (`uploads/*`)
 
 #### `uploads/multipart.ts`
+
 - parses multipart bodies with explicit limits
 - never writes to DB
 
 #### `uploads/file-type.ts`
+
 - deep file-type detection using magic bytes
 
 #### `uploads/scan.ts`
+
 - malware scanning adapter (pluggable)
 - default implementation MAY be `clean` in development
 
@@ -377,6 +420,7 @@ WSGuard mirrors the HTTP pipeline.
 All WS types MUST be in `wsguard/ws-types.ts`.
 
 Minimum:
+
 - `WsActor` (mirrors Actor)
 - `WsEventEnvelope` `{ type, request_id, payload }`
 
@@ -395,6 +439,7 @@ A build-time checker MUST exist (name is canonical):
 - `check-balanceguard`
 
 Minimum guarantees:
+
 - all HTTP routes in `src/server/http/routes/**` and `src/app/api/**` (if present) are BalanceGuard-wrapped
 - all WebSocket entrypoints use WSGuard
 
@@ -414,6 +459,7 @@ tests/shared/security/wsguard/**
 Minimum required suites:
 
 ### BalanceGuard
+
 - unauthenticated access to auth-required route → `AUTH_REQUIRED`
 - role mismatch → `FORBIDDEN`
 - AAL insufficient → `STEP_UP_REQUIRED`
@@ -422,6 +468,7 @@ Minimum required suites:
 - rate limit exceeded → `RATE_LIMITED`
 
 ### WSGuard
+
 - handshake origin blocked
 - handshake auth failure
 - connection cap exceeded
@@ -435,6 +482,7 @@ Minimum required suites:
 ## 10. Definition of Done (Structure)
 
 A security-layer change is complete only when:
+
 - files are placed exactly as defined here
 - import rules remain clean
 - BalanceGuard and WSGuard pipelines are intact
@@ -449,4 +497,3 @@ A security-layer change is complete only when:
 This document locks the **shape** of BalanceGuard v3 and WSGuard v3.
 
 It prevents architectural drift, enforces clean dependency direction, and ensures the security layer remains stable as features (MFA, passkeys, uploads, realtime) expand.
-

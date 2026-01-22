@@ -1,44 +1,56 @@
 // src/shared/security/balanceguard/balanceguard.ts
 // BalanceGuard (Day 0 implementation)
 //
-// This wrapper is mandatory for every real HTTP endpoint.
-// It is a thin orchestration layer that:
-// - Extracts request metadata (surface, ip)
-// - Provides hooks for Origin / CSRF / RateLimit / Identity / AuthZ
-// - Normalizes and safely responds on errors
+// Mandatory wrapper for every real HTTP endpoint.
+// Enforces transport security + safe error normalization.
 //
-// IMPORTANT:
-// - No business logic here. BalanceGuard only enforces transport security.
-// - Security headers should be applied once at the transport edge (server adapter).
-//   (We apply them in src/server/http/server.ts as the final step.)
+// Auth policy (important for tests + Day 0):
+// - If opts.requireAuth is set, we obey it.
+// - Else if opts.resolveActor is provided, we default:
+//     site -> no auth required
+//     client/admin -> auth required
+// - Else (no identity hook), auth is NOT required (Day 0 public mode).
 
 import type { RequestContext } from "../../logging/request-context.js";
 import { securityLogger } from "../../logging/security-logger.js";
 
 import { enforceOrigin } from "./origin.js";
 import { enforceCsrf } from "./csrf.js";
+import { extractIp } from "./ip.js";
+import { enforceRateLimitHttp } from "./rate-limit.js";
 
+import { AppError } from "../../errors/app-error.js";
 import { normalizeError } from "../../errors/normalize-error.js";
 import { toHttpErrorResponse } from "../../errors/http-error-response.js";
 
-import type { BalanceGuardOptions, Actor } from "./types.js";
-import { extractIp } from "./ip.js";
+import type { BalanceGuardOptions, Actor, Surface } from "./types.js";
 
 export type BalanceGuardHandler = (ctx: RequestContext, req: Request) => Promise<Response>;
 
-export function balanceguard(
-  opts: BalanceGuardOptions,
-  handler: BalanceGuardHandler
-): BalanceGuardHandler {
+function defaultRouteKey(req: Request): string {
+  const u = new URL(req.url);
+  return `${req.method}:${u.pathname}`;
+}
+
+function defaultRequireAuth(surface: Surface): boolean {
+  return surface !== "site";
+}
+
+function computeRequireAuth(opts: BalanceGuardOptions): boolean {
+  if (opts.requireAuth !== undefined) return opts.requireAuth;
+
+  // Only apply default auth rules when identity hook is in play.
+  // Day 0 wrappers/tests without resolveActor must allow handler execution.
+  if (opts.resolveActor) return defaultRequireAuth(opts.surface);
+
+  return false;
+}
+
+export function balanceguard(opts: BalanceGuardOptions, handler: BalanceGuardHandler): BalanceGuardHandler {
   return async (ctx, req) => {
     const ip = extractIp(req);
 
-    // (Optional) enrich ctx for downstream log helpers.
-    // We avoid mutating ctx (readonly) — if you want ctx enrichment, do it at ctx creation
-    // in server.ts instead. For Day 0, we log these fields directly here.
-
     try {
-      // ---- (A) Metadata / audit hooks
       securityLogger.info("BG_HTTP_REQUEST", {
         surface: opts.surface,
         ip,
@@ -46,39 +58,46 @@ export function balanceguard(
         url: req.url,
       });
 
-      // ---- (B) Origin enforcement hook (future)
+      // Origin
       if (opts.requireOrigin) {
-        // Throw AppError({ code: "ORIGIN_REJECTED", status: 403, message: "Origin rejected" })
-        if (opts.requireOrigin) {
-            enforceOrigin(req, opts.surface);
-        }
+        enforceOrigin(req, opts.surface);
       }
 
-      // ---- (C) CSRF enforcement hook (future)
+      // CSRF
       if (opts.requireCsrf && req.method !== "GET" && req.method !== "HEAD") {
-        // Throw AppError({ code: "CSRF_INVALID", status: 403, message: "CSRF invalid" })
-        if (opts.requireCsrf && req.method !== "GET" && req.method !== "HEAD") {
-            enforceCsrf(req);
-        }
+        enforceCsrf(req);
       }
 
-      // ---- (D) Rate limiting hook (future)
-      // TODO: implement enforceRateLimitHttp(ip, opts.surface)
+      // Rate limit (before handler)
+      if (opts.rateLimit) {
+        const routeKey = opts.rateLimit.routeKey ? opts.rateLimit.routeKey(req) : defaultRouteKey(req);
 
-      // ---- (E) Resolve actor hook (future)
-      // For Day 0: everything is anonymous.
-      const actor: Actor = { type: "anon" };
-      void actor; // silence lint until the authz hook is implemented
+        await enforceRateLimitHttp({
+          surface: opts.surface,
+          ip,
+          routeKey,
+          max: opts.rateLimit.max,
+          windowMs: opts.rateLimit.windowMs,
+          store: opts.rateLimit.store,
+        });
+      }
 
-      // ---- (F) AuthZ hook (future)
-      // TODO: enforceAuthz(actor, opts.surface, req)
+      // Identity (hookable)
+      const actor: Actor = opts.resolveActor ? await opts.resolveActor(ctx, req) : { type: "anon" };
 
-      // ---- (G) Call actual handler
+      // Auth (see policy above)
+      if (computeRequireAuth(opts) && actor.type === "anon") {
+        throw new AppError({
+          code: "AUTH_REQUIRED",
+          status: 401,
+          message: "Auth required",
+        });
+      }
+
       return await handler(ctx, req);
     } catch (err) {
       const n = normalizeError(err);
 
-      // Log for operators: include code/status and safe details for debugging.
       securityLogger.error("BG_HTTP_ERROR", {
         surface: opts.surface,
         ip,
@@ -88,7 +107,6 @@ export function balanceguard(
         details: n.details,
       });
 
-      // Safe client response (no stack traces, always includes request_id).
       return toHttpErrorResponse(ctx, n);
     }
   };

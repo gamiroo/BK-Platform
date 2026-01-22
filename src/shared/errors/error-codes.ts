@@ -30,4 +30,8 @@ export type ErrorCode =
   | "SESSION_INVALID"
   | "SESSION_EXPIRED"
   | "AUTH_REQUIRED"
-  | "AUTHZ_DENIED";
+  | "AUTHZ_DENIED"
+  
+  // Zoho CRM
+  | "ZOHO_AUTH_FAILED"
+  | "ZOHO_SYNC_FAILED";

@@ -1,69 +1,99 @@
 // src/shared/db/schema/index.ts
 /**
  * Canonical Drizzle schema entrypoint.
- *
- * This file is the single source-of-truth for Postgres schema definitions.
- *
- * Rules:
- * - All new tables/enums live under `src/shared/db/schema/*` and are exported here.
- * - Migrations are generated from this schema into `drizzle/`.
- * - The DB is part of the trust boundary: use constraints and types to enforce invariants.
  */
 
-import { pgTable, text, timestamp, uuid, jsonb, integer, index } from "drizzle-orm/pg-core";
+import {
+  pgTable,
+  text,
+  timestamp,
+  uuid,
+  jsonb,
+  integer,
+  index,
+  uniqueIndex,
+} from "drizzle-orm/pg-core";
 
-/**
- * Environment marker table (operational).
- *
- * Purpose:
- * - Provides a deterministic way to prove "this DATABASE_URL points at DEV" vs "PROD".
- *
- * One row only (id = 1).
- * Values:
- * - env = "dev" | "prod"
- */
 export const bkEnvMarker = pgTable("bk_env_marker", {
   id: integer("id").primaryKey().default(1),
   env: text("env").notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-/**
- * Audit log skeleton (future-ready).
- *
- * Purpose:
- * - Central, append-only audit stream for security and operational events.
- * - Designed to align with BalanceGuard logging + future compliance needs.
- *
- * Notes:
- * - Keep payload flexible using JSONB (redacted upstream as needed).
- * - Avoid storing secrets; store references/ids only.
- */
+export const users = pgTable(
+  "users",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    email: text("email").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    usersEmailUq: uniqueIndex("users_email_uq").on(t.email),
+    usersCreatedAtIdx: index("users_created_at_idx").on(t.createdAt),
+  })
+);
+
+export const sessions = pgTable(
+  "sessions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    surface: text("surface").notNull(),
+    userId: uuid("user_id").notNull(),
+    tokenHash: text("token_hash").notNull(),
+    ipHash: text("ip_hash"),
+    uaHash: text("ua_hash"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (t) => ({
+    sessionsTokenHashUq: uniqueIndex("sessions_token_hash_uq").on(t.tokenHash),
+    sessionsUserIdx: index("sessions_user_id_idx").on(t.userId),
+    sessionsSurfaceIdx: index("sessions_surface_idx").on(t.surface),
+    sessionsExpiresIdx: index("sessions_expires_at_idx").on(t.expiresAt),
+  })
+);
+
 export const auditLog = pgTable(
   "audit_log",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-
-    // Correlates to RequestContext.request_id where applicable.
     requestId: text("request_id"),
-
-    // Surface where the event occurred: "site" | "client" | "admin" (future-enforced enum)
     surface: text("surface").notNull(),
-
-    // Actor identity (future): anon/user/admin/system identifiers
     actorType: text("actor_type").notNull().default("anon"),
     actorId: text("actor_id"),
-
-    // Event taxonomy (future): e.g. "AUTH_LOGIN", "ORDER_SUBMIT", "CSRF_REJECTED"
     eventType: text("event_type").notNull(),
-
-    // Additional metadata (must be redacted upstream)
     payload: jsonb("payload").notNull().default({}),
-
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
     auditLogEventTypeIdx: index("audit_log_event_type_idx").on(t.eventType),
     auditLogCreatedAtIdx: index("audit_log_created_at_idx").on(t.createdAt),
+  })
+);
+
+export const enquiries = pgTable(
+  "enquiries",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+
+    name: text("name").notNull(),
+    email: text("email").notNull(),
+    message: text("message").notNull(),
+
+    // Zoho sync tracking
+    zohoLeadId: text("zoho_lead_id"),
+    zohoSyncStatus: text("zoho_sync_status").notNull().default("pending"), // pending | ok | failed
+    zohoLastError: text("zoho_last_error"),
+    zohoSyncedAt: timestamp("zoho_synced_at", { withTimezone: true }),
+
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    enquiriesCreatedAtIdx: index("enquiries_created_at_idx").on(t.createdAt),
+    enquiriesEmailIdx: index("enquiries_email_idx").on(t.email),
+    enquiriesZohoStatusIdx: index("enquiries_zoho_status_idx").on(t.zohoSyncStatus),
   })
 );
