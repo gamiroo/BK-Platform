@@ -18,6 +18,7 @@ import { enforceOrigin } from "./origin.js";
 import { enforceCsrf } from "./csrf.js";
 import { extractIp } from "./ip.js";
 import { enforceRateLimitHttp } from "./rate-limit.js";
+import { applyCorsHeaders, preflightResponse } from "../../http/cors.js";
 
 import { AppError } from "../../errors/app-error.js";
 import { normalizeError } from "../../errors/normalize-error.js";
@@ -58,6 +59,12 @@ export function balanceguard(opts: BalanceGuardOptions, handler: BalanceGuardHan
         url: req.url,
       });
 
+      // CORS preflight must short-circuit BEFORE origin/csrf/rate-limit.
+      if (req.method === "OPTIONS") {
+        return preflightResponse(opts.surface, req);
+      }
+
+
       // Origin
       if (opts.requireOrigin) {
         enforceOrigin(req, opts.surface);
@@ -94,7 +101,9 @@ export function balanceguard(opts: BalanceGuardOptions, handler: BalanceGuardHan
         });
       }
 
-      return await handler(ctx, req);
+      const res = await handler(ctx, req);
+      return applyCorsHeaders(opts.surface, req, res);
+
     } catch (err) {
       const n = normalizeError(err);
 
@@ -107,7 +116,9 @@ export function balanceguard(opts: BalanceGuardOptions, handler: BalanceGuardHan
         details: n.details,
       });
 
-      return toHttpErrorResponse(ctx, n);
+      const res = toHttpErrorResponse(ctx, n);
+      return applyCorsHeaders(opts.surface, req, res);
+
     }
   };
 }

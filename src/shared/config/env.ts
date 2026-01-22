@@ -120,17 +120,26 @@ export function loadRuntimeEnv(): RuntimeEnv {
   const REDIS_URL = parseRedisUrl(optionalEnv("REDIS_URL"));
   const LOG_LEVEL = parseLogLevel(optionalEnv("LOG_LEVEL"));
   const VERCEL_ENV = parseVercelEnv(optionalEnv("VERCEL_ENV"));
+  const SITE_ORIGINS = optionalEnv("SITE_ORIGINS");
+  const CLIENT_ORIGINS = optionalEnv("CLIENT_ORIGINS");
+  const ADMIN_ORIGINS = optionalEnv("ADMIN_ORIGINS");
 
   const out: {
     NODE_ENV: Env["NODE_ENV"];
     REDIS_URL?: string;
     LOG_LEVEL?: LogLevel;
     VERCEL_ENV?: NonNullable<Env["VERCEL_ENV"]>;
+    SITE_ORIGINS?: string;
+    CLIENT_ORIGINS?: string;
+    ADMIN_ORIGINS?: string;
   } = { NODE_ENV };
 
   if (REDIS_URL !== undefined) out.REDIS_URL = REDIS_URL;
   if (LOG_LEVEL !== undefined) out.LOG_LEVEL = LOG_LEVEL;
   if (VERCEL_ENV !== undefined) out.VERCEL_ENV = VERCEL_ENV;
+  if (SITE_ORIGINS !== undefined) out.SITE_ORIGINS = SITE_ORIGINS;
+  if (CLIENT_ORIGINS !== undefined) out.CLIENT_ORIGINS = CLIENT_ORIGINS;
+  if (ADMIN_ORIGINS !== undefined) out.ADMIN_ORIGINS = ADMIN_ORIGINS;
 
   return out;
 }
