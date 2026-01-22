@@ -6,7 +6,7 @@
  * This module defines Zoho-specific required configuration.
  */
 
-import { optionalEnv, requireEnv } from "../../config/env.ts";
+import { optionalEnv, requireEnv } from "../../config/env.js";
 
 export type ZohoDataCenter = "US" | "AU" | "EU" | "IN" | "CN";
 

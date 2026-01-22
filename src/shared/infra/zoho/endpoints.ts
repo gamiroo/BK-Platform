@@ -1,5 +1,5 @@
 // src/shared/infra/zoho/endpoints.ts
-import type { ZohoDataCenter } from "./env.ts";
+import type { ZohoDataCenter } from "./env.js";
 
 export type ZohoEndpoints = Readonly<{
   accountsBaseUrl: string;

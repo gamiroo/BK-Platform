@@ -5,10 +5,10 @@
 
 import { AppError } from "../../errors/app-error.js";
 import { logger } from "../../logging/logger.js";
-import { loadZohoEnv } from "./env.ts";
-import { zohoEndpoints } from "./endpoints.ts";
-import { getZohoAccessToken } from "./oauth.ts";
-import type { ZohoCRMLead, ZohoCRMResponse } from "./types.ts";
+import { loadZohoEnv } from "./env.js";
+import { zohoEndpoints } from "./endpoints.js";
+import { getZohoAccessToken } from "./oauth.js";
+import type { ZohoCRMLead, ZohoCRMResponse } from "./types.js";
 
 function abortAfter(ms: number): AbortSignal {
   const c = new AbortController();

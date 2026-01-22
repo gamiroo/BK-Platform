@@ -9,9 +9,9 @@
 
 import { AppError } from "../../errors/app-error.js";
 import { logger } from "../../logging/logger.js";
-import { loadZohoEnv } from "./env.ts";
-import { zohoEndpoints } from "./endpoints.ts";
-import type { ZohoTokenResponse } from "./types.ts";
+import { loadZohoEnv } from "./env.js";
+import { zohoEndpoints } from "./endpoints.js";
+import type { ZohoTokenResponse } from "./types.js";
 
 type CachedToken = Readonly<{
   token: string;
