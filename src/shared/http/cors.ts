@@ -47,9 +47,10 @@ function decideCors(surface: Surface, origin: string | null): CorsDecision {
   if (!origin) return { allowed: false, allowCredentials: false, origin: null };
 
   const env = loadRuntimeEnv();
-  const siteAllowed = splitCsv(env.SITE_ORIGINS);
-  const clientAllowed = splitCsv(env.CLIENT_ORIGINS);
-  const adminAllowed = splitCsv(env.ADMIN_ORIGINS);
+const siteAllowed = splitCsv(env.CORS_SITE_ORIGINS);
+const clientAllowed = splitCsv(env.CORS_CLIENT_ORIGINS);
+const adminAllowed = splitCsv(env.CORS_ADMIN_ORIGINS);
+
 
   if (surface === "site") {
     // Allow explicit origins + Vercel site previews.
