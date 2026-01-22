@@ -100,7 +100,7 @@ Rules:
 
 ## 4. Logging Toolkit (`src/shared/logging`)
 
-### Files
+### logger Files
 
 - `logger.ts` — Pino base logger
 - `request-context.ts` — request-scoped logger/context
@@ -124,7 +124,7 @@ Redaction:
 
 ## 5. Error Toolkit (`src/shared/errors`)
 
-### Files
+### Error Files
 
 - `error-codes.ts` — canonical error codes
 - `app-error.ts` — typed error (code, status, metadata)
@@ -140,7 +140,7 @@ Rules:
 
 ## 6. Validation & Parsing Toolkit (`src/shared/validation`)
 
-### Files
+### File Structure
 
 - `parse-json.ts` — safe JSON parsing + size limits
 - `schema.ts` — schema helpers
@@ -156,7 +156,7 @@ Rules:
 
 ## 7. HTTP Toolkit (`src/shared/http`)
 
-### Files
+### File Structure
 
 - `headers.ts` — security headers policy
 - `responses.ts` — json/noContent helpers
@@ -176,7 +176,7 @@ Rules:
 
 BalanceGuard is the mandatory security wrapper for all HTTP routes.
 
-### Files (canonical)
+### File Structure (canonical)
 
 ```text
 src/shared/security/balanceguard/
@@ -212,7 +212,7 @@ src/shared/security/balanceguard/
 
 WSGuard applies BalanceGuard principles to WebSockets.
 
-### Files (canonical)
+### File structure (canonical)
 
 ```text
 src/shared/security/wsguard/
@@ -238,7 +238,7 @@ src/shared/security/wsguard/
 
 ## 10. Database Toolkit (`src/shared/db`)
 
-### Files (canonical)
+### File structure
 
 ```text
 src/shared/db/
@@ -331,6 +331,30 @@ No JS theme branching.
 ---
 
 ## 15. Frontend Toolkit (`src/frontend/lib`)
+
+### 15.0 CSS Modules — Strict Access (Mandatory)
+
+Because `noUncheckedIndexedAccess: true` is enforced across all frontend surfaces, **direct access to CSS Modules is forbidden**.
+
+CSS class access must be **fail-fast and type-safe**.
+
+Canonical helper:
+
+- `mustClass(styles, className)`
+
+Rules:
+
+- CSS Modules must be typed as `Record<string, string>`
+- Accessing `styles.foo` directly is not permitted
+- Missing class names must throw immediately
+- `string | undefined` is never allowed to reach DOM rendering
+- This rule applies to **site**, **client**, and **admin** surfaces
+
+Canonical implementation location:
+
+```text
+src/frontend/shared/css-modules.ts
+```
 
 ### 15.1 CSS Modules strict access helper (`mustClass`, `cx`)
 

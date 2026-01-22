@@ -1,4 +1,5 @@
 # enquiry_module.md — Enquiry Module (v1)
+
 Referenced by balance.md
 > **Canonical Enquiry module specification** for Balance Kitchen (BK).
 >
@@ -292,4 +293,3 @@ The Enquiry module is “done” for production when:
 - Logs are structured and redacted
 - Tests cover success/failure/honeypot/rate limit
 - No domain logic exists in routes
-

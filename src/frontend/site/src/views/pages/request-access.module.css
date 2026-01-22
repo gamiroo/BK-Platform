@@ -1,0 +1,61 @@
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 22px;
+  border: 1px solid var(--bk-border, rgba(255,255,255,0.08));
+  border-radius: 16px;
+  background: var(--bk-surface, rgba(255,255,255,0.06));
+  max-width: 680px;
+}
+
+.h1 {
+  margin: 0;
+  font-size: 28px;
+  line-height: 1.2;
+}
+
+.p {
+  margin: 0 0 6px 0;
+  opacity: 0.9;
+}
+
+.status {
+  min-height: 20px;
+  font-size: 14px;
+  opacity: 0.9;
+}
+
+.input {
+  height: 42px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--bk-border, rgba(255,255,255,0.16));
+  background: transparent;
+  color: inherit;
+}
+
+.textarea {
+  min-height: 140px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--bk-border, rgba(255,255,255,0.16));
+  background: transparent;
+  color: inherit;
+  resize: vertical;
+}
+
+.button {
+  height: 44px;
+  border-radius: 12px;
+  border: 1px solid var(--bk-border, rgba(255,255,255,0.16));
+  background: var(--bk-accent, #D3AF37);
+  color: #111;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}

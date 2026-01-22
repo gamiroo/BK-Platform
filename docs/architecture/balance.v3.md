@@ -402,8 +402,33 @@ Balance Kitchen consists of **three primary surfaces**.
   - Anonymous-only (no sessions)
   - Aggressively rate-limited
 
+### Temporary External Services (Zoho)
+
+For the initial site release phase, BK uses Zoho services as **temporary external dependencies**:
+
+- **Zoho CRM (Leads):** receives website enquiries from the marketing site
+- **Zoho Chat Widget:** provides public site chat until the internal chat system ships
+
+Rules:
+
+- These integrations are **temporary** and will be replaced by:
+  - **BalanceCRM** (internal CRM bounded context)
+  - **BalanceChat** (internal chat bounded context)
+- No core domain logic may depend on Zoho-specific data models, field semantics, or response shapes
+- All Zoho secrets remain server-side only (API surface); the marketing site build contains **no secrets**
+
 **Future direction:**
 In the future, Balance Kitchen will introduce an internally built, **Discord-style chat system** where primary customer contact originates through a structured marketing-site chat funnel. This becomes a key surface where **gamification experiences are delivered and enhanced**.
+
+**Temporary external services (initial release):**
+
+- Marketing enquiries are submitted to **Zoho CRM (Leads)** via the BK API.
+- Public site chat uses **Zoho Chat widget**.
+
+These integrations are **temporary** and will be replaced by:
+
+- **BalanceCRM** (internal CRM + enquiry lifecycle + follow-up workflows)
+- **BalanceChat** (internal realtime chat system, canonical to BK)
 
 ### 8.2 Client Dashboard
 
@@ -422,6 +447,28 @@ In the future, Balance Kitchen will introduce an internally built, **Discord-sty
 - Manage deliveries
 - Respond to enquiries
 - Monitor system activity
+
+### 8.4 Deployment Surfaces (Canonical)
+
+Balance Kitchen is deployed using **four independent Vercel projects**, mapped directly to system surfaces.
+
+These projects are **already live and governed** by CI/CD.
+
+| Surface | Vercel Project | Deployment Type |
+| ------- | ---------------- | ----------------- |
+| Marketing Site | `site` | Static Vite build |
+| Client Dashboard | `client` | Static Vite build |
+| Admin Dashboard | `admin` | Static Vite build |
+| Backend API | `api` | Serverless Functions (HTTP + WS) |
+
+Deployment rules (locked):
+
+- All projects deploy from the `main` branch
+- CI enforces typecheck, lint, tests, build, and security checks
+- Secrets are permitted **only** in the `api` project
+- No frontend surface may contain credentials or private keys
+
+This separation is mandatory to preserve security, isolation, and auditability.
 
 Each surface has its own frontend entry point but shares backend APIs.
 

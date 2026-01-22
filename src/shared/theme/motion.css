@@ -1,0 +1,19 @@
+/* src/shared/theme/motion.css
+   Motion tokens (minimal). Extend later as needed.
+*/
+
+:root {
+  --bk-duration-fast: 120ms;
+  --bk-duration-med: 220ms;
+  --bk-duration-slow: 360ms;
+
+  --bk-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --bk-duration-fast: 0ms;
+    --bk-duration-med: 0ms;
+    --bk-duration-slow: 0ms;
+  }
+}

@@ -5,21 +5,50 @@
 > This document defines **copy/paste-safe templates**, **mandatory options**, and **review checklists**. It is written so an AI agent or developer can implement routes **without inventing behavior**.
 >
 > This document MUST be used alongside:
+>
 > - `balanceguard.md` (v3)
 > - `balanceguard_structure.md` (v3)
 > - `balance_kitchen_architecture.md`
 
 ---
 
-## 1. Purpose & Scope
+## 0. Purpose & Scope
 
 This document exists to:
+
 - prevent "almost compliant" routes
 - standardize BalanceGuard options across surfaces
 - ensure step-up auth, CSRF, Origin, and rate limits are applied consistently
 - provide deterministic patterns for HTTP and WebSocket entrypoints
 
 If a route does not match one of the templates in this file, **it is not compliant**.
+
+---
+
+## 1. Compliance Rules (Quick Checklist)
+
+Every **HTTP** route MUST:
+
+- [ ] Be wrapped using a **surface wrapper** (mandatory):
+  - `balanceguardSite(...)`
+  - `balanceguardClient(...)`
+  - `balanceguardAdmin(...)`
+- [ ] Return responses using the standard JSON envelope helpers:
+  - `json(ctx, data)` for success
+  - `jsonError(ctx, status, code, message)` for expected errors
+- [ ] Ensure `request_id` is included in responses via:
+  - response envelope (`request_id`)
+  - header (`x-request-id`)
+- [ ] Enforce Origin checks when configured (fail-closed in production if allowlist missing)
+- [ ] Enforce CSRF for unsafe methods where required by surface policy
+- [ ] Enforce Rate Limiting **before** handler execution (surface defaults)
+- [ ] Normalize unknown errors at the BalanceGuard boundary and return safe envelopes
+- [ ] Apply security headers at the final transport edge (Node server adapter / Vercel handler)
+
+Non-negotiables:
+
+- No business logic inside BalanceGuard or transports.
+- Transport adapters may normalize paths and build RequestContext only.
 
 ---
 
@@ -95,6 +124,7 @@ balanceguard(
 ```
 
 **Notes:**
+
 - Sensitive GETs (e.g. `/me`, `/account`) MUST set `origin.sensitive = true`
 - Resource-level authorization MUST occur inside the use-case
 
@@ -326,6 +356,7 @@ Each route MUST be tested for:
 - resource authorization failure
 
 WebSocket tests MUST include:
+
 - handshake origin failure
 - auth failure
 - connection cap exceeded
@@ -343,6 +374,7 @@ WebSocket tests MUST include:
 - [ ] Step-up auth enforced where required
 - [ ] CSRF + Origin configured correctly
 - [ ] Rate limits deterministic
+- [ ] Rate limit store configured (Redis required in production; fail-closed if missing)
 - [ ] Use-cases enforce resource auth
 - [ ] Error handling normalized
 - [ ] Tests cover failure paths
@@ -354,4 +386,3 @@ WebSocket tests MUST include:
 Any route or WebSocket entrypoint that does not conform to this document is **non-compliant by definition**.
 
 This document is authoritative.
-

@@ -24,7 +24,7 @@
 
 🧱 CORS + Origin enforcement is **surface‑aware**
 
-⏱️ Rate limiting is mandatory, **burst‑aware**, for HTTP and WebSockets
+⏱️ Rate limiting is mandatory for HTTP (steady fixed-window); burst/token-bucket is reserved for future implementation
 
 🧾 CSRF is required for **all state‑changing session routes (including logout)**
 
@@ -64,6 +64,21 @@ CI must fail if:
 - rate limiting / origin / CSRF enforcement is missing where required
 
 This prevents security regressions from reaching trunk or production.
+
+Additional CI/runtime guardrail (Vercel API deployments):
+
+- Vercel Serverless Function entrypoints MUST export a Web Handler:
+  - `export default { async fetch(request) { return Response } }`
+
+Rationale:
+
+- Incorrect handler shapes can cause requests to never finalize (timeouts / 504).
+- This is a production availability risk and is treated as a compliance failure.
+
+This guardrail is part of BalanceGuard’s “fail closed” principle:
+availability failures must be surfaced immediately and deterministically.
+
+---
 
 ### 0.2 Runtime Enforcement Status
 
@@ -285,25 +300,45 @@ Strategy: double‑submit cookie (canonical).
 
 ## 12. Rate Limiting (Canonical Defaults)
 
-### HTTP Defaults
+### 12.1 Contract
 
-| Surface | Rate | Burst |
-| ------ | ------ | ------- |
-| Public | 5/s | 10 |
-| Client | 10/s | 20 |
-| Admin | 20/s | 40 |
+BalanceGuard rate limiting is:
 
-### WebSocket Defaults
+- deterministic and testable (store injected)
+- keyed by: `surface + ip + routeKey`
+- fixed-window: allow up to `max` requests per `windowMs`
 
-- Events: 15/s burst 30
-- Connections:
-  - Anonymous: 2/IP
-  - Authenticated: 5/user
+When a request exceeds the limit:
 
-Exceeding limits:
+- HTTP responds `429`
+- error code: `RATE_LIMITED`
+- details include:
+  - `surface`
+  - `routeKey`
+  - `reset_at_ms`
+  - `limit`
 
-- HTTP → `429`
-- WS → drop event, then disconnect if sustained
+### 12.2 Storage Strategy
+
+BalanceGuard uses a pluggable store:
+
+- `test` / `development`: in-memory store allowed when `REDIS_URL` is not set
+- `production` (or `VERCEL_ENV=production`): Redis is required (fail-closed if missing)
+
+Redis configuration:
+
+- env var: `REDIS_URL`
+- store uses atomic increment + expiry to implement fixed-window counters
+
+### 12.3 Default Bucket Key
+
+Default key format is stable and low-cardinality:
+
+- `bg:rl:<surface>:<ip>:<routeKey>`
+
+Default `routeKey` is:
+
+- `METHOD:pathname` (query string excluded)
 
 ---
 
@@ -357,7 +392,7 @@ WebSockets MUST enforce:
 - Origin allowlist
 - Session authentication
 - Role + resource authorization per event
-- Rate limits with burst
+- Rate limits (steady; burst/token-bucket reserved for future implementation)
 - Backpressure thresholds
 
 ---
@@ -370,7 +405,7 @@ Tests MUST cover:
 - AAL enforcement
 - Step‑up flows
 - CSRF failures
-- Rate limits (steady + burst)
+- Rate limits (steady fixed-window; burst/token-bucket reserved for future implementation)
 - Session revocation
 - WebSocket abuse paths
 

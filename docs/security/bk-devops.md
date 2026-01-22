@@ -243,6 +243,33 @@ This is a **hard gate**.
 
 ## 5. CD — Deployment Pipeline
 
+### 5.0 BK Deployment Shape (Vercel — Canonical)
+
+BK deploys as **4 separate Vercel Projects** to preserve surface isolation and keep BalanceGuard boundaries real.
+
+Projects (canonical names):
+
+- `site`   — static Vite build (marketing)
+- `client` — static Vite build (authenticated client dashboard)
+- `admin`  — static Vite build (authenticated admin dashboard)
+- `api`    — Vercel Serverless Functions (Node.js runtime)
+
+Rules:
+
+- Each project has **its own env var set** (do not share env vars across surfaces).
+- Each project is deployed from the same GitHub repo, but uses different build commands/outputs.
+- Preview deployments are enabled (per PR).
+- Production deployments track `main`.
+
+Vercel notes (non-negotiable runtime invariant):
+
+- API functions MUST be implemented as **Web Handler** format:
+  - `export default { async fetch(request) { return Response } }`
+- Do NOT export `export default async function handler(req: Request): Promise<Response>` for Vercel Node Functions
+  - This can lead to a request **never being finalized** (timeouts / 504).
+
+This invariant is enforced via CI + production safety checks (see §6.4).
+
 ### 5.1 Staging Deployment
 
 Triggered by:
@@ -287,6 +314,46 @@ Rule:
 
 ## 6. Database Migration Discipline
 
+### 6.0 Neon Postgres Environment Discipline (BK Standard)
+
+BK uses Neon Postgres with a **hard separation between development and production**.
+
+Canonical rule:
+
+- **Production DB** is only used by:
+  - Vercel Production deployments (from `main`)
+  - local developers ONLY when explicitly testing production (rare, break-glass)
+- **Development DB** is used by:
+  - local development
+  - preview deployments (optional, if configured)
+  - staging-like testing
+
+Neon structure:
+
+- Prefer separate Neon projects OR separate Neon branches (both acceptable).
+- BK’s security posture assumes **dev and prod are logically separate** regardless of Neon’s UI label (“child branch” etc).
+
+Environment variables:
+
+- Local `.env.local` MUST provide `DATABASE_URL` (active environment URL).
+- Vercel projects MUST set `DATABASE_URL` per environment target:
+  - Production: `DATABASE_URL` points to Production DB
+  - Preview/Development: `DATABASE_URL` points to Development DB
+
+BK environment marker (mandatory):
+
+BK maintains a DB marker table row that proves the deployment is connected to the correct environment.
+
+- Table: `bk_env_marker`
+- Single row enforced (id=1)
+- Column: `env` set to:
+  - `dev` for development DB
+  - `prod` for production DB
+
+This marker enables “prod safety checks” and prevents accidental writes to prod from dev deployments.
+
+---
+
 ### 6.1 Migration Rules
 
 - use timestamped migrations (monotonic)
@@ -319,6 +386,96 @@ Migrations are executed with:
 - explicit logs
 - idempotency
 - failure alerts
+
+### 6.4 Production Safety Checks (Mandatory)
+
+BK enforces safety checks that prevent:
+
+- accidental use of Production DB from non-production contexts
+- schema drift/migration mismatch reaching trunk
+- accidental prod migrations from a developer machine
+
+These checks run in CI and/or at runtime depending on the gate.
+
+#### 6.4.1 DB Environment Marker Gate
+
+BK maintains a DB marker table row that proves the deployment is connected to the correct environment.
+
+- Table: `bk_env_marker`
+- Single row enforced (id=1)
+- Column: `env` set to:
+  - `dev` for development DB
+  - `prod` for production DB
+
+Rules:
+
+- Production MUST see:
+  - `bk_env_marker.env = 'prod'`
+- Development (local, preview, non-main) MUST see:
+  - `bk_env_marker.env = 'dev'`
+
+If the marker does not match, the system MUST fail closed.
+
+#### 6.4.2 Production Migration Hard Lock (Mandatory)
+
+Production migrations MUST be guarded by a hard lock script.
+
+Production migration execution MUST refuse to proceed unless ALL are true:
+
+- `CONFIRM_PROD_MIGRATE=YES`
+- `DATABASE_URL` is set
+- `NODE_ENV=production`
+- If `VERCEL_ENV` is present, it MUST equal `production`
+- DB marker safety check passes (expected marker resolves to `prod`)
+
+This prevents the #1 operational accident: running migrations against the wrong database.
+
+#### 6.4.3 Canonical Migration Guard Scripts (Implemented)
+
+BK’s production migration safety is enforced by two scripts:
+
+1) `scripts/confirm-prod-migrate.mjs`
+
+- Hard-lock guard for production migrations.
+- Refuses to proceed unless:
+  - `CONFIRM_PROD_MIGRATE=YES`
+  - `DATABASE_URL` is set
+
+1) `scripts/db-safety-check.ts`
+
+- Connects to the database and validates the env marker:
+
+  - Expected marker is derived from runtime (`NODE_ENV`, and `VERCEL_ENV` if present)
+  - Actual marker is read from `bk_env_marker` (id=1)
+- Fails closed on mismatch.
+
+Canonical `package.json` scripts:
+
+- `db:safety:dev`
+  - Runs the marker check against local dev env (`.env.local`)
+- `db:safety:prod`
+  - Runs the hard-lock guard + marker check (expects prod)
+- `db:migrate:prod`
+  - MUST run the hard-lock guard FIRST, then migration tooling
+  - MUST be used for production DB changes
+
+This combination prevents the #1 operational accident:
+migrating the wrong database from a developer machine or misconfigured deployment.
+
+#### 6.4.4 Migration Drift Gate
+
+BK must prevent “drift” where:
+
+- code expects schema that migrations have not produced
+- migrations exist but were not applied to the intended DB
+
+Rules:
+
+- migrations are monotonic, never edited after merge
+- migrations must be applied to the correct environment DB
+- CI must verify that migration files exist for schema changes
+
+This drift gate is a prerequisite before production deploy confidence.
 
 ---
 
