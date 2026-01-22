@@ -17,7 +17,7 @@
  */
 
 import { AppError } from "../errors/app-error.js";
-import { loadEnv } from "../config/env.ts";
+import { loadEnv } from "../config/env.js";
 import type { DbHandle } from "./client.js";
 
 export type DbEnvMarker = "dev" | "prod";
