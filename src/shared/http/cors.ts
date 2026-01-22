@@ -129,3 +129,51 @@ export function preflightResponse(surface: Surface, req: Request): Response {
 
   return new Response(null, { status: 204, headers: extra });
 }
+
+// --- keep everything above as-is (types + helpers) ---
+
+export function applyCors(req: Request, surface: Surface, res: Response): Response {
+  const extra = corsHeaders({ surface, req });
+  if (extra.keys().next().done) return res;
+
+  const next = new Headers(res.headers);
+
+  // Merge CORS headers
+  extra.forEach((v, k) => {
+    if (k.toLowerCase() === "vary") {
+      // Preserve existing Vary while ensuring Origin is included
+      const existing = next.get("Vary");
+      if (!existing) {
+        next.set("Vary", v);
+      } else if (!existing.split(",").map((s) => s.trim()).includes("Origin")) {
+        next.set("Vary", `${existing}, Origin`);
+      }
+      return;
+    }
+    next.set(k, v);
+  });
+
+  return new Response(res.body, {
+    status: res.status,
+    statusText: res.statusText,
+    headers: next,
+  });
+}
+
+/**
+ * Returns a preflight response if this is an OPTIONS request, otherwise null.
+ * Use this BEFORE routing/BalanceGuard.
+ */
+export function handlePreflight(req: Request, surface: Surface): Response | null {
+  if (req.method.toUpperCase() !== "OPTIONS") return null;
+
+  const extra = corsHeaders({ surface, req });
+
+  // Not allowed -> explicit 403 (browser will still block, but it helps debugging)
+  if (extra.keys().next().done) {
+    return new Response("CORS origin denied", { status: 403 });
+  }
+
+  return new Response(null, { status: 204, headers: extra });
+}
+

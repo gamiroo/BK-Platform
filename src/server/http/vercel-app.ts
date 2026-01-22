@@ -8,12 +8,16 @@
  *   - /api/site hits api/site.ts
  *   - /api/site/* hits api/site/[...path].ts
  * - We normalize /api/<surface>/<path> -> /<path> before routing.
+ *
+ * CORS:
+ * - We must respond to OPTIONS preflights for cross-origin fetch.
+ * - We must attach Access-Control-* headers to ALL responses (including errors).
  */
 
 import type { RequestContext } from "../../shared/logging/request-context.js";
-import { createRequestContext } from "../../shared/logging/request-context.js";
-import { runWithRequestContext } from "../../shared/logging/request-context.js";
+import { createRequestContext, runWithRequestContext } from "../../shared/logging/request-context.js";
 import { applySecurityHeaders } from "../../shared/http/headers.js";
+import { applyCors, handlePreflight } from "../../shared/http/cors.js";
 import { jsonError } from "../../shared/http/responses.js";
 import { logger } from "../../shared/logging/logger.js";
 
@@ -51,11 +55,14 @@ const routers: Record<Surface, Router> = {
 function stripSurfacePrefix(req: Request, surface: Surface): Request {
   const u = new URL(req.url);
   const prefix = `/api/${surface}`;
+
   if (u.pathname === prefix) {
     u.pathname = "/";
   } else if (u.pathname.startsWith(prefix + "/")) {
     u.pathname = u.pathname.slice(prefix.length);
   }
+
+  // Preserve method/headers/body/etc
   return new Request(u.toString(), req);
 }
 
@@ -65,25 +72,47 @@ export function makeVercelHandler(surface: Surface) {
   return async function handler(req: Request): Promise<Response> {
     const ctx: RequestContext = createRequestContext({ surface });
 
-    // Establish ALS context synchronously, then run async work inside.
     return runWithRequestContext(ctx, () => {
       return (async () => {
-        try {
-          const normalizedReq = stripSurfacePrefix(req, surface);
+        // Normalize early so even errors/preflight get correct CORS + logs
+        const normalizedReq = stripSurfacePrefix(req, surface);
 
+        try {
           logger.info(
             { request_id: ctx.request_id, surface, method: normalizedReq.method, url: normalizedReq.url },
             "vercel_http_request"
           );
 
-          const res = await router.handle(ctx, normalizedReq);
-          return applySecurityHeaders(res);
+          const preflight = handlePreflight(normalizedReq, surface);
+          if (preflight) {
+            return applySecurityHeaders(preflight);
+          }
+
+          let res: Response;
+
+          // ✅ CORS preflight must short-circuit BEFORE routing/BalanceGuard
+          if (normalizedReq.method.toUpperCase() === "OPTIONS") {
+            res = new Response(null, { status: 204 });
+          } else {
+            res = await router.handle(ctx, normalizedReq);
+          }
+
+          // ✅ ALWAYS apply CORS headers, then security headers
+          res = applyCors(normalizedReq, surface, res);
+          res = applySecurityHeaders(res);
+
+          return res;
         } catch (err) {
           logger.error(
             { request_id: ctx.request_id, surface, message: err instanceof Error ? err.message : String(err) },
             "vercel_http_error"
           );
-          return applySecurityHeaders(jsonError(ctx, 500, "INTERNAL_ERROR", "Unexpected error"));
+
+          // ✅ Even error responses must get CORS headers
+          let res = jsonError(ctx, 500, "INTERNAL_ERROR", "Unexpected error");
+          res = applyCors(normalizedReq, surface, res);
+          res = applySecurityHeaders(res);
+          return res;
         }
       })();
     });

@@ -67,6 +67,29 @@ export function registerSiteRoutes(router: Router): void {
     })
   );
 
+  // ✅ Preflight for enquiry (must exist)
+  router.options(
+    "/enquiry",
+    balanceguardSite(
+      async (ctx: RequestContext, req: Request) => {
+        // applyCors should set:
+        // - Access-Control-Allow-Origin
+        // - Access-Control-Allow-Methods
+        // - Access-Control-Allow-Headers
+        // - Access-Control-Allow-Credentials (if you use cookies)
+        const res = new Response(null, { status: 204 });
+        return applyCors(req, "site", res);
+      },
+      {
+        // IMPORTANT: preflight should not require origin/auth/csrf, just CORS
+        requireOrigin: false,
+        requireCsrf: false,
+        requireAuth: false,
+        rateLimit: undefined,
+      }
+    )
+  );
+
 
   router.get(
     "/",
