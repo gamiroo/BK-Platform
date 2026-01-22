@@ -1,16 +1,20 @@
+// src/frontend/site/src/shared/api.ts
+
 function inferApiBaseUrl(): string {
-  const explicit = (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_API_BASE_URL;
+  const env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env;
+
+  const explicit = env?.VITE_API_BASE_URL;
   if (explicit && explicit.length > 0) return explicit;
 
-  // Local dev: site on 5173, api likely on 3000
-  const host = window.location.hostname;
-  const port = window.location.port;
+  // Local dev fallback only
+  if (window.location.hostname === "localhost" && window.location.port === "5173") {
+    return "http://localhost:3000";
+  }
 
-  if (host === "localhost" && port === "5173") return "http://localhost:3000";
-
-  // Production: if you front the API behind the same origin via rewrites, this works.
-  // If you use api.<domain>, set VITE_API_BASE_URL in the site project.
-  return "";
+  // Fail fast in production-like environments
+  throw new Error(
+    "VITE_API_BASE_URL is not configured for the site surface"
+  );
 }
 
 export const API_BASE_URL = inferApiBaseUrl();
