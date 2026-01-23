@@ -46,9 +46,7 @@ export function registerSiteRoutes(router: Router): void {
     })
   );
 
-  router.options("/enquiry", async (_ctx: RequestContext, req: Request) => {
-    return preflightResponse("site", req);
-  });
+  router.options("/enquiry", async (_ctx, req) => preflightResponse("site", req));
 
   router.post(
     "/enquiry",
