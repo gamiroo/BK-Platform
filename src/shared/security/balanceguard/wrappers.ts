@@ -78,29 +78,35 @@ function makeSurfaceWrapper(surface: Surface) {
   const base = makeBase(surface, store);
 
   function withDefaults(partial?: WrapperOpts): BalanceGuardOptions {
+
     const requireOrigin = partial?.requireOrigin ?? base.requireOrigin;
     const requireCsrf = partial?.requireCsrf ?? base.requireCsrf;
     const requireAuth = partial?.requireAuth ?? base.requireAuth;
 
-    const rateLimitResolved =
-      partial?.rateLimit === undefined
-        ? base.rateLimit
-        : partial.rateLimit
-        ? { store, ...partial.rateLimit }
-        : undefined;
+    // ✅ Distinguish omitted vs explicitly set to undefined
+    const hasRateLimitProp =
+      partial !== undefined && Object.prototype.hasOwnProperty.call(partial, "rateLimit");
 
-    // IMPORTANT: only include optional props when defined
+    const rateLimitResolved =
+      !hasRateLimitProp
+        ? base.rateLimit // omitted => default
+        : partial!.rateLimit === undefined
+        ? undefined // explicit undefined => disable
+        : { store, ...partial!.rateLimit }; // object => override
+
+    // ✅ Build without ever assigning optional props to undefined (exactOptionalPropertyTypes-safe)
     const out: BalanceGuardOptions = {
       surface: base.surface,
       requireOrigin,
       requireCsrf,
       requireAuth,
-      ...(base.resolveActor ? { resolveActor: base.resolveActor } : {}),
       ...(rateLimitResolved ? { rateLimit: rateLimitResolved } : {}),
+      ...(base.resolveActor ? { resolveActor: base.resolveActor } : {}),
     };
 
     return out;
   }
+
 
   // overloads
   return (a: WrapperOpts | SurfaceHandler | CtxOnlyHandler, b?: SurfaceHandler | CtxOnlyHandler): BalanceGuardHandler => {
