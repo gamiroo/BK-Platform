@@ -12,7 +12,7 @@ import { jsonError } from "../../shared/http/responses.js";
 
 export type RouteHandler = (ctx: RequestContext, req: Request) => Promise<Response>;
 
-type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS";
 
 type RouteKey = `${Method} ${string}`;
 
@@ -38,6 +38,10 @@ export class Router {
   delete(path: string, handler: RouteHandler): void {
     this.routes.set(key("DELETE", path), handler);
   }
+  options(path: string, handler: RouteHandler): void {
+    this.routes.set(key("OPTIONS", path), handler);
+  }
+
 
   /**
    * Dispatch the request to a handler.

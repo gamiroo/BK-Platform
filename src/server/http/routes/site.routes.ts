@@ -8,7 +8,7 @@ import { balanceguardSite } from "../../../shared/security/balanceguard/wrappers
 import { json } from "../../../shared/http/responses.js";
 import { normalizeError } from "../../../shared/errors/normalize-error.js";
 import { toHttpErrorResponse } from "../../../shared/errors/http-error-response.js";
-
+import { applyCorsHeaders, preflightResponse  } from "../../../shared/http/cors.js";
 import { createDb } from "../../../shared/db/client.js";
 import {
   readDbEnvMarker,
@@ -18,7 +18,6 @@ import {
 } from "../../../shared/db/env-marker.js";
 
 import { submitEnquiry, validateEnquiryInput } from "../../../modules/enquiry/application/submit-enquiry.js";
-import { AppError } from "../../../shared/errors/app-error.js";
 
 function methodNotAllowed(ctx: RequestContext): Response {
   return toHttpErrorResponse(
@@ -30,6 +29,7 @@ function methodNotAllowed(ctx: RequestContext): Response {
 }
 
 export function registerSiteRoutes(router: Router): void {
+
   router.get(
     "/health",
     balanceguardSite(async (ctx: RequestContext) => {
@@ -46,28 +46,29 @@ export function registerSiteRoutes(router: Router): void {
     })
   );
 
+  router.options("/enquiry", async (_ctx, req) => preflightResponse("site", req));
+
   router.post(
     "/enquiry",
-    balanceguardSite(async (ctx, req) => {
-      let raw: unknown;
-      try {
-        raw = await req.json();
-      } catch {
-        throw new AppError({
-          code: "VALIDATION_FAILED",
-          status: 400,
-          message: "Invalid JSON body",
-        });
+    balanceguardSite(
+      {
+        requireOrigin: true,
+        requireCsrf: false,
+        requireAuth: false,
+        rateLimit: { max: 10, windowMs: 60_000 },
+      },
+      async (ctx: RequestContext, req: Request) => {
+        const raw = await req.json().catch(() => null);
+        const input = validateEnquiryInput(raw);
+        const out = await submitEnquiry(input);
+
+        const res = json(ctx, { lead_id: out.leadId });
+        return applyCorsHeaders("site", req, res);
       }
-
-      const input = validateEnquiryInput(raw);
-      const out = await submitEnquiry(input);
-
-      return json(ctx, { lead_id: out.leadId });
-    })
+    )
   );
 
-
+  
   router.get(
     "/",
     balanceguardSite(async (ctx: RequestContext) => {
