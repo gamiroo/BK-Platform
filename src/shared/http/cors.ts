@@ -47,9 +47,10 @@ function decideCors(surface: Surface, origin: string | null): CorsDecision {
   if (!origin) return { allowed: false, allowCredentials: false, origin: null };
 
   const env = loadRuntimeEnv();
-  const siteAllowed = splitCsv(env.CORS_SITE_ORIGINS);
-  const clientAllowed = splitCsv(env.CORS_CLIENT_ORIGINS);
-  const adminAllowed = splitCsv(env.CORS_ADMIN_ORIGINS);
+  const siteAllowed = splitCsv(env.BK_ORIGINS_SITE);
+  const clientAllowed = splitCsv(env.BK_ORIGINS_CLIENT);
+  const adminAllowed = splitCsv(env.BK_ORIGINS_ADMIN);
+
 
 
   if (surface === "site") {
@@ -164,16 +165,26 @@ export function applyCors(req: Request, surface: Surface, res: Response): Respon
  * Returns a preflight response if this is an OPTIONS request, otherwise null.
  * Use this BEFORE routing/BalanceGuard.
  */
+// src/shared/http/cors.ts
+
 export function handlePreflight(req: Request, surface: Surface): Response | null {
   if (req.method.toUpperCase() !== "OPTIONS") return null;
 
-  const extra = corsHeaders({ surface, req });
+  // IMPORTANT: preflight must never crash (otherwise browser reports CORS w/ no headers)
+  try {
+    const extra = corsHeaders({ surface, req });
 
-  // Not allowed -> explicit 403 (browser will still block, but it helps debugging)
-  if (extra.keys().next().done) {
-    return new Response("CORS origin denied", { status: 403 });
+    // Not allowed -> explicit 403
+    if (extra.keys().next().done) {
+      return new Response("CORS origin denied", { status: 403 });
+    }
+
+    return new Response(null, { status: 204, headers: extra });
+  } catch (err) {
+    // Fail closed, but don't crash the function
+    console.error("CORS preflight error:", err);
+    return new Response("CORS preflight error", { status: 500 });
   }
-
-  return new Response(null, { status: 204, headers: extra });
 }
+
 

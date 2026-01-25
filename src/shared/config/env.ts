@@ -42,10 +42,18 @@ export type RuntimeEnv = Readonly<{
   REDIS_URL?: string;
   LOG_LEVEL?: LogLevel;
   VERCEL_ENV?: NonNullable<Env["VERCEL_ENV"]>;
+
+  // ✅ add these
+  BK_ORIGINS_SITE?: string;
+  BK_ORIGINS_CLIENT?: string;
+  BK_ORIGINS_ADMIN?: string;
+
+  // (optional: you can delete CORS_* later once migrated everywhere)
   CORS_SITE_ORIGINS?: string;
   CORS_CLIENT_ORIGINS?: string;
   CORS_ADMIN_ORIGINS?: string;
 }>;
+
 
 /**
  * Read a required environment variable (throws if missing).
@@ -123,26 +131,33 @@ export function loadRuntimeEnv(): RuntimeEnv {
   const REDIS_URL = parseRedisUrl(optionalEnv("REDIS_URL"));
   const LOG_LEVEL = parseLogLevel(optionalEnv("LOG_LEVEL"));
   const VERCEL_ENV = parseVercelEnv(optionalEnv("VERCEL_ENV"));
-  const CORS_SITE_ORIGINS = optionalEnv("CORS_SITE_ORIGINS");
-  const CORS_CLIENT_ORIGINS = optionalEnv("CORS_CLIENT_ORIGINS");
-  const CORS_ADMIN_ORIGINS = optionalEnv("CORS_ADMIN_ORIGINS");
+  const BK_ORIGINS_SITE = optionalEnv("BK_ORIGINS_SITE");
+  const BK_ORIGINS_CLIENT = optionalEnv("BK_ORIGINS_CLIENT");
+  const BK_ORIGINS_ADMIN = optionalEnv("BK_ORIGINS_ADMIN");
 
   const out: {
     NODE_ENV: Env["NODE_ENV"];
     REDIS_URL?: string;
     LOG_LEVEL?: LogLevel;
     VERCEL_ENV?: NonNullable<Env["VERCEL_ENV"]>;
+
+    BK_ORIGINS_SITE?: string;
+    BK_ORIGINS_CLIENT?: string;
+    BK_ORIGINS_ADMIN?: string;
+
     CORS_SITE_ORIGINS?: string;
     CORS_CLIENT_ORIGINS?: string;
     CORS_ADMIN_ORIGINS?: string;
+
   } = { NODE_ENV };
 
   if (REDIS_URL !== undefined) out.REDIS_URL = REDIS_URL;
   if (LOG_LEVEL !== undefined) out.LOG_LEVEL = LOG_LEVEL;
   if (VERCEL_ENV !== undefined) out.VERCEL_ENV = VERCEL_ENV;
-  if (CORS_SITE_ORIGINS !== undefined) out.CORS_SITE_ORIGINS = CORS_SITE_ORIGINS;
-  if (CORS_CLIENT_ORIGINS !== undefined) out.CORS_CLIENT_ORIGINS = CORS_CLIENT_ORIGINS;
-  if (CORS_ADMIN_ORIGINS !== undefined) out.CORS_ADMIN_ORIGINS = CORS_ADMIN_ORIGINS;
+
+  if (BK_ORIGINS_SITE !== undefined) out.BK_ORIGINS_SITE = BK_ORIGINS_SITE;
+  if (BK_ORIGINS_CLIENT !== undefined) out.BK_ORIGINS_CLIENT = BK_ORIGINS_CLIENT;
+  if (BK_ORIGINS_ADMIN !== undefined) out.BK_ORIGINS_ADMIN = BK_ORIGINS_ADMIN;
 
   return out;
 }
@@ -157,6 +172,7 @@ export function loadEnv(): Env {
   const REDIS_URL = parseRedisUrl(optionalEnv("REDIS_URL"));
   const LOG_LEVEL = parseLogLevel(optionalEnv("LOG_LEVEL"));
   const VERCEL_ENV = parseVercelEnv(optionalEnv("VERCEL_ENV"));
+  
 
   // Build object without ever setting optional props to undefined.
   const out: {
