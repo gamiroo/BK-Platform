@@ -8,8 +8,8 @@ import { balanceguardSite } from "../../../shared/security/balanceguard/wrappers
 import { json } from "../../../shared/http/responses.js";
 import { normalizeError } from "../../../shared/errors/normalize-error.js";
 import { toHttpErrorResponse } from "../../../shared/errors/http-error-response.js";
-import { applyCorsHeaders, preflightResponse  } from "../../../shared/http/cors.js";
 import { createDb } from "../../../shared/db/client.js";
+import { applyCorsHeaders } from "../../../shared/http/cors.js";
 import {
   readDbEnvMarker,
   expectedMarkerFromRuntime,
@@ -46,13 +46,12 @@ export function registerSiteRoutes(router: Router): void {
     })
   );
 
-  router.options("/enquiry", async (_ctx, req) => preflightResponse("site", req));
 
   router.post(
     "/enquiry",
     balanceguardSite(
       {
-        requireOrigin: true,
+        requireOrigin: false,   // ✅ change this
         requireCsrf: false,
         requireAuth: false,
         rateLimit: { max: 10, windowMs: 60_000 },
@@ -67,6 +66,7 @@ export function registerSiteRoutes(router: Router): void {
       }
     )
   );
+
 
   
   router.get(
