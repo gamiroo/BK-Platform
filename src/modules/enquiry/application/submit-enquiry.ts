@@ -88,7 +88,7 @@ export async function submitEnquiry(input: EnquirySubmitInput): Promise<Readonly
     Last_Name: input.lastName,          // required by Zoho
     ...(input.firstName ? { First_Name: input.firstName } : {}),
     Email: input.email,
-    Lead_Source: "Website Enquiry",
+    Lead_Source: "Website - General Enquiry",
     Description: description,
   };
 
