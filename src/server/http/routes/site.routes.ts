@@ -6,6 +6,7 @@ import type { Router } from "../router.js";
 import type { RequestContext } from "../../../shared/logging/request-context.js";
 import { balanceguardSite } from "../../../shared/security/balanceguard/wrappers.js";
 import { json } from "../../../shared/http/responses.js";
+import { AppError } from "../../../shared/errors/app-error.js";
 import { normalizeError } from "../../../shared/errors/normalize-error.js";
 import { toHttpErrorResponse } from "../../../shared/errors/http-error-response.js";
 import { createDb } from "../../../shared/db/client.js";
@@ -23,13 +24,16 @@ function methodNotAllowed(ctx: RequestContext): Response {
   return toHttpErrorResponse(
     ctx,
     normalizeError(
-      new Error("Method not allowed")
+      new AppError({
+        code: "METHOD_NOT_ALLOWED",
+        status: 405,
+        message: "Method not allowed",
+      })
     )
   );
 }
 
 export function registerSiteRoutes(router: Router): void {
-
   router.get(
     "/health",
     balanceguardSite(async (ctx: RequestContext) => {
@@ -46,12 +50,16 @@ export function registerSiteRoutes(router: Router): void {
     })
   );
 
-
+  // Public site API endpoints live under /api/site/*
   router.post(
-    "/enquiry",
+    "/api/site/enquiry",
     balanceguardSite(
       {
-        requireOrigin: false,   // ✅ change this
+        // Public enquiry endpoint:
+        // - No auth
+        // - CSRF not applicable (no session required)
+        // - Origin relaxed for local dev + marketing forms
+        requireOrigin: true,
         requireCsrf: false,
         requireAuth: false,
         rateLimit: { max: 10, windowMs: 60_000 },
@@ -67,20 +75,19 @@ export function registerSiteRoutes(router: Router): void {
     )
   );
 
+  // Optional: explicit 405 if someone hits GET /api/site/enquiry
+  router.get(
+    "/api/site/enquiry",
+    balanceguardSite(async (ctx: RequestContext) => {
+      return methodNotAllowed(ctx);
+    })
+  );
 
-  
+  // Simple surface ping (optional)
   router.get(
     "/",
     balanceguardSite(async (ctx: RequestContext) => {
       return json(ctx, { surface: "site", status: "ok" });
-    })
-  );
-
-  // Optional: explicit 405s if someone hits GET /enquiry
-  router.get(
-    "/enquiry",
-    balanceguardSite(async (ctx: RequestContext) => {
-      return methodNotAllowed(ctx);
     })
   );
 }
