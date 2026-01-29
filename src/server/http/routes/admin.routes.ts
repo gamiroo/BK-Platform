@@ -5,7 +5,7 @@ import type { RequestContext } from "../../../shared/logging/request-context.js"
 import type { Router } from "../router.js";
 import { balanceguardAdmin } from "../../../shared/security/balanceguard/wrappers.js";
 import { json } from "../../../shared/http/responses.js";
-import { AppError } from "../../../shared/errors/app-error.ts";
+import { AppError } from "../../../shared/errors/app-error.js";
 import { normalizeError } from "../../../shared/errors/normalize-error.js";
 import { toHttpErrorResponse } from "../../../shared/errors/http-error-response.js";
 

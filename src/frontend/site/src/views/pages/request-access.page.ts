@@ -5,10 +5,10 @@
  * UI-only page.
  *
  * Contract:
- * - NEVER call fetch() directly
- * - ALWAYS use http-client
- * - HTTP errors are standardized (HttpClientError)
- * - Only programmer bugs throw past our handler
+ * - NEVER call the browser network API directly.
+ * - ALWAYS use the canonical frontend HTTP client.
+ * - HTTP failures are standardized (HttpClientError).
+ * - Only programmer bugs should escape our handler.
  *
  * Why:
  * - Deterministic control flow
@@ -21,11 +21,7 @@ import { renderShell } from "../layout/shell.js";
 import styles from "./request-access.module.css";
 import { mustClass } from "../../../../shared/css-modules.js";
 import { LOCALE_CHANGED_EVENT, t } from "../../../../shared/il8n.js";
-import {
-  httpPost,
-  expectOk,
-  HttpClientError,
-} from "../../../../lib/http-client.js";
+import { httpPost, expectOk, HttpClientError } from "../../../../lib/http-client.js";
 
 type EnquiryPayload = Readonly<{
   firstName?: string;
@@ -58,6 +54,10 @@ function readValue(form: HTMLFormElement, name: string): string {
 
 /**
  * Clipboard helper with safe fallback.
+ *
+ * Notes:
+ * - `navigator.clipboard` requires secure context; fallback keeps UX working in dev.
+ * - This helper is intentionally "fire-and-forget" to avoid blocking the UI.
  */
 function copyToClipboard(text: string): void {
   void (async () => {
@@ -115,6 +115,12 @@ function copyIconSvg(): SVGSVGElement {
 
 /**
  * Modal tooltip (success / error).
+ *
+ * Guarantees:
+ * - Only one tooltip exists at a time.
+ * - ESC closes the modal.
+ * - Clicking the overlay closes the modal.
+ * - "OK" always returns the user to a safe route via onOk().
  */
 function showTooltip(state: TooltipState): void {
   const existing = document.getElementById("bk_request_access_tooltip");
@@ -383,6 +389,11 @@ export function renderRequestAccessPage(root: HTMLElement): void {
   const h1 = el("h1", { class: mustClass(styles, "h1") }, t("enquiry.h1"));
   const p = el("p", { class: mustClass(styles, "p") }, t("enquiry.p"));
 
+  /**
+   * Locale refresh:
+   * - This page uses placeholders for most labels to preserve the clean visual style.
+   * - When locale changes, we update text/placeholder content in-place.
+   */
   const refresh = (): void => {
     h1.textContent = t("enquiry.h1");
     p.textContent = t("enquiry.p");
@@ -398,6 +409,7 @@ export function renderRequestAccessPage(root: HTMLElement): void {
 
   form.append(h1, p, status, firstName, lastName, email, phone, message, submitBtn);
 
+  // Keep handler sync; launch async explicitly.
   form.addEventListener("submit", (e) => {
     e.preventDefault();
 
@@ -418,9 +430,10 @@ export function renderRequestAccessPage(root: HTMLElement): void {
 
     void (async () => {
       try {
-        const data = expectOk(
-          await httpPost<EnquiryResponse>("/api/site/enquiry", payload)
-        );
+        // Canonical request path for site surface enquiries:
+        // - Always goes through http-client
+        // - expectOk() throws HttpClientError for any {ok:false} response
+        const data = expectOk(await httpPost<EnquiryResponse>("/api/site/enquiry", payload));
 
         const msg = t("enquiry.submitted_ref").replace("{ref}", data.lead_id);
 

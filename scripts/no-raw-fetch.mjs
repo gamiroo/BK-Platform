@@ -5,6 +5,9 @@
  *
  * This script scans src/frontend/** and fails if it finds `fetch(` anywhere
  * outside the allowed file.
+ *
+ * IMPORTANT:
+ * - We intentionally ignore occurrences inside comments (// and /* ... *\/).
  */
 
 import fs from "node:fs/promises";
@@ -44,26 +47,74 @@ async function* walk(dir) {
   }
 }
 
+/**
+ * Find `fetch(` in code, ignoring:
+ * - // line comments
+ * - /* block comments *\/
+ *
+ * This is a small purpose-built scanner (not a full parser), but is stable
+ * enough for enforcement.
+ */
 function findFetchHits(text) {
-  // We enforce a simple, explicit rule:
-  // - any `fetch(` occurrence is disallowed (outside allowlisted files)
-  // This includes `window.fetch(` which we also want to prevent.
   const hits = [];
 
   const lines = text.split(/\r?\n/u);
+
+  let inBlock = false;
+
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const idx = line.indexOf("fetch(");
+    const originalLine = lines[i];
+
+    // Walk the line char by char, respecting comment state.
+    let code = "";
+    let j = 0;
+
+    while (j < originalLine.length) {
+      const ch = originalLine[j];
+      const next = originalLine[j + 1];
+
+      if (inBlock) {
+        // End of block comment?
+        if (ch === "*" && next === "/") {
+          inBlock = false;
+          j += 2;
+          continue;
+        }
+        j += 1;
+        continue;
+      }
+
+      // Start of line comment?
+      if (ch === "/" && next === "/") {
+        break;
+      }
+
+      // Start of block comment?
+      if (ch === "/" && next === "*") {
+        inBlock = true;
+        j += 2;
+        continue;
+      }
+
+      code += ch;
+      j += 1;
+    }
+
+    // Now scan code-only portion for fetch(
+    const idx = code.indexOf("fetch(");
     if (idx !== -1) {
-      hits.push({ line: i + 1, col: idx + 1, sample: line.trim() });
+      hits.push({
+        line: i + 1,
+        col: idx + 1,
+        sample: originalLine.trim(),
+      });
     }
   }
+
   return hits;
 }
 
 async function main() {
-  // If the folder doesn’t exist (unlikely), don’t fail the build.
-  // But in this repo it should always exist.
   try {
     await fs.access(FRONTEND_DIR);
   } catch {
@@ -76,16 +127,12 @@ async function main() {
   for await (const file of walk(FRONTEND_DIR)) {
     const ext = path.extname(file);
     if (!EXT_ALLOW.has(ext)) continue;
-
-    // allowlisted file is the only allowed place to contain fetch(
     if (ALLOWLIST.has(file)) continue;
 
     const content = await fs.readFile(file, "utf8");
     const hits = findFetchHits(content);
 
-    if (hits.length) {
-      offenders.push({ file, hits });
-    }
+    if (hits.length) offenders.push({ file, hits });
   }
 
   if (!offenders.length) {
