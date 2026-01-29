@@ -1,9 +1,11 @@
-const appClient = document.querySelector<HTMLDivElement>("#app");
-if (!appClient) throw new Error("Missing #app element.");
+import "../../../shared/theme/globals.css";
+import "../../../shared/theme/tokens.css";
+import "../../../shared/theme/motion.css";
 
-appClient.innerHTML = `
-  <main style="font-family: system-ui; padding: 24px;">
-    <h1>Client Dashboard</h1>
-    <p>Client surface is wired.</p>
-  </main>
-`;
+import { startClientApp } from "./app.js";
+
+const root = document.getElementById("app");
+if (!root) throw new Error("Missing #app root");
+
+startClientApp(root);
+

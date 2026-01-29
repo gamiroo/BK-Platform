@@ -7,6 +7,11 @@ import type { RequestContext } from "../../../../src/shared/logging/request-cont
 import type { Actor } from "../../../../src/shared/security/balanceguard/types.js";
 
 test("balanceguard: when client surface has anon actor, returns AUTH_REQUIRED 401", async () => {
+  // NOTE:
+  // In tests we stub the RequestContext minimal shape needed by the HTTP envelope:
+  // `toHttpErrorResponse()` reads ctx.request_id to include it in:
+  //   - response header: x-request-id
+  //   - response body:   { request_id: ... }
   const ctx = { request_id: "req_auth_1" } as unknown as RequestContext;
   const req = new Request("https://example.test/x", { method: "GET" });
 
@@ -21,10 +26,15 @@ test("balanceguard: when client surface has anon actor, returns AUTH_REQUIRED 40
   const res = await handler(ctx, req);
   assert.equal(res.status, 401);
 
-  const body = await res.json();
+  const body = (await res.json()) as unknown as {
+    ok: boolean;
+    request_id: string;
+    error: { code: string; message: string; details?: unknown };
+  };
+
   assert.equal(body.ok, false);
+  assert.equal(body.request_id, "req_auth_1");
   assert.equal(body.error.code, "AUTH_REQUIRED");
-  assert.equal(body.error.request_id, "req_auth_1");
 });
 
 test("balanceguard: when client surface has client actor, handler runs", async () => {

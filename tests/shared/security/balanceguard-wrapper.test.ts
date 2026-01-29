@@ -95,7 +95,10 @@ test("balanceguard: when requireOrigin=true, rejects missing allowlist in produc
     assert.equal(res.status, 403);
 
     const body = await readJson<{ ok: boolean; request_id: string; error: { code: string; message: string } }>(res);
-    assert.deepEqual(body.error, { code: "ORIGIN_REJECTED", message: "Origin rejected" });
-
+    assert.deepEqual(body.error, {
+      code: "ORIGIN_REJECTED",
+      message: "Origin rejected",
+      details: { reason: "no_allowlist_configured", surface: "client" },
+    });
   });
 });
