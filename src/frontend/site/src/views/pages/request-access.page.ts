@@ -194,6 +194,144 @@ function showTooltip(state: TooltipState): void {
   okBtn.focus();
 }
 
+function copyToClipboard(text: string): void {
+  void (async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      document.body.append(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+    }
+  })();
+}
+
+/**
+ * IMPORTANT:
+ * Our `el()` helper is typed for HTML tags only (HTMLElementTagNameMap),
+ * so it cannot safely create SVG. Create SVG nodes using createElementNS.
+ */
+function copyIconSvg(): SVGSVGElement {
+  const ns = "http://www.w3.org/2000/svg";
+
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  svg.classList.add(mustClass(styles, "icon"));
+
+  const path = document.createElementNS(ns, "path");
+  path.setAttribute(
+    "d",
+    "M8 8V6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-2"
+  );
+  path.setAttribute("stroke", "currentColor");
+  path.setAttribute("stroke-width", "2");
+  path.setAttribute("stroke-linecap", "round");
+  path.setAttribute("stroke-linejoin", "round");
+
+  const rect = document.createElementNS(ns, "rect");
+  rect.setAttribute("x", "4");
+  rect.setAttribute("y", "8");
+  rect.setAttribute("width", "12");
+  rect.setAttribute("height", "12");
+  rect.setAttribute("rx", "2");
+  rect.setAttribute("stroke", "currentColor");
+  rect.setAttribute("stroke-width", "2");
+
+  svg.append(path, rect);
+  return svg;
+}
+
+function showTooltip(state: TooltipState): void {
+  const existing = document.getElementById("bk_request_access_tooltip");
+  if (existing) existing.remove();
+
+  const copied = el("span", { class: mustClass(styles, "copied"), "aria-live": "polite" }) as HTMLSpanElement;
+
+  const overlay = el("div", {
+    id: "bk_request_access_tooltip",
+    class: mustClass(styles, "overlay"),
+  }) as HTMLDivElement;
+
+  const dotClass = state.kind === "success" ? "dotSuccess" : "dotError";
+
+  const title = el(
+    "h2",
+    { class: mustClass(styles, "tooltipTitle") },
+    el(
+      "span",
+      { class: mustClass(styles, "badge") },
+      el("span", { class: mustClass(styles, dotClass), "aria-hidden": "true" }),
+      state.title
+    )
+  ) as HTMLHeadingElement;
+
+  const copyBtn = el(
+    "button",
+    { class: mustClass(styles, "iconButton"), type: "button" },
+    copyIconSvg(),
+    t("tooltip.copy")
+  ) as HTMLButtonElement;
+
+  const okBtn = el(
+    "button",
+    {
+      class: mustClass(styles, "okButton"),
+      type: "button",
+      autofocus: "true",
+    },
+    t("tooltip.ok")
+  ) as HTMLButtonElement;
+
+  const tooltip = el(
+    "div",
+    { class: mustClass(styles, "tooltip"), role: "dialog", "aria-modal": "true" },
+    el("div", { class: mustClass(styles, "tooltipHeader") }, title, copyBtn),
+    el("p", { class: mustClass(styles, "tooltipBody") }, state.message),
+    el("div", { class: mustClass(styles, "tooltipActions") }, copied, okBtn)
+  ) as HTMLDivElement;
+
+  const close = (): void => {
+    overlay.remove();
+    state.onOk();
+  };
+
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) close();
+  });
+
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      if (e.key === "Escape") close();
+    },
+    { once: true }
+  );
+
+  copyBtn.addEventListener("click", () => {
+    copyToClipboard(state.message);
+    copied.textContent = t("tooltip.copied");
+    window.setTimeout(() => {
+      copied.textContent = "";
+    }, 1200);
+  });
+
+  okBtn.addEventListener("click", close);
+
+  overlay.append(tooltip);
+  document.body.append(overlay);
+  okBtn.focus();
+}
+
 export function renderRequestAccessPage(root: HTMLElement): void {
   const status = el("div", {
     class: mustClass(styles, "status"),
