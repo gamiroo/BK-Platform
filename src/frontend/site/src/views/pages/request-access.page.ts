@@ -1,8 +1,27 @@
+// src/frontend/site/src/views/pages/request-access.page.ts
+/**
+ * Request Access (Enquiry) Page
+ * -----------------------------
+ * UI-only page.
+ *
+ * Contract:
+ * - NEVER call the browser network API directly.
+ * - ALWAYS use the canonical frontend HTTP client.
+ * - HTTP failures are standardized (HttpClientError).
+ * - Only programmer bugs should escape our handler.
+ *
+ * Why:
+ * - Deterministic control flow
+ * - Localizable error handling
+ * - Security + observability consistency
+ */
+
 import { el, clear } from "../../shared/dom.js";
 import { renderShell } from "../layout/shell.js";
 import styles from "./request-access.module.css";
 import { mustClass } from "../../../../shared/css-modules.js";
 import { LOCALE_CHANGED_EVENT, t } from "../../../../shared/il8n.js";
+import { httpPost, expectOk, HttpClientError } from "../../../../lib/http-client.js";
 
 type EnquiryPayload = Readonly<{
   firstName?: string;
@@ -10,6 +29,10 @@ type EnquiryPayload = Readonly<{
   email: string;
   phone?: string;
   message: string;
+}>;
+
+type EnquiryResponse = Readonly<{
+  lead_id: string;
 }>;
 
 type TooltipKind = "success" | "error";
@@ -21,64 +44,14 @@ type TooltipState = Readonly<{
   onOk: () => void;
 }>;
 
+/**
+ * Read a trimmed string value from a form.
+ */
 function readValue(form: HTMLFormElement, name: string): string {
   const v = new FormData(form).get(name);
   return typeof v === "string" ? v.trim() : "";
 }
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null;
-}
-
-async function safeReadJson(res: Response): Promise<unknown | null> {
-  const ct = res.headers.get("content-type") ?? "";
-  if (!ct.includes("application/json")) return null;
-
-  const text = await res.text();
-  if (!text) return null;
-
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    return null;
-  }
-}
-
-function readErrorMessage(v: unknown): string | null {
-  if (!isRecord(v)) return null;
-
-  const err = v["error"];
-  if (!isRecord(err)) return null;
-
-  const msg = err["message"];
-  return typeof msg === "string" && msg.trim().length > 0 ? msg : null;
-}
-
-async function submit(payload: EnquiryPayload): Promise<Readonly<{ lead_id: string }>> {
-  const res = await fetch("/api/site/enquiry", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-
-  const body = await safeReadJson(res);
-
-  if (!res.ok) {
-    const msg =
-      readErrorMessage(body) ??
-      t("enquiry.failed_status").replace("{status}", String(res.status));
-    throw new Error(msg);
-  }
-
-  if (!isRecord(body)) throw new Error(t("enquiry.failed_generic"));
-  const data = body["data"];
-  if (!isRecord(data)) throw new Error(t("enquiry.failed_generic"));
-
-  const lead_id = data["lead_id"];
-  if (typeof lead_id !== "string") throw new Error(t("enquiry.failed_generic"));
-
-  return { lead_id };
-}
 
 function copyToClipboard(text: string): void {
   void (async () => {
@@ -219,7 +192,10 @@ function showTooltip(state: TooltipState): void {
 }
 
 export function renderRequestAccessPage(root: HTMLElement): void {
-  const status = el("div", { class: mustClass(styles, "status"), "aria-live": "polite" }) as HTMLDivElement;
+  const status = el("div", {
+    class: mustClass(styles, "status"),
+    "aria-live": "polite",
+  }) as HTMLDivElement;
 
   const form = el("form", { class: mustClass(styles, "form") }) as HTMLFormElement;
 
@@ -263,19 +239,22 @@ export function renderRequestAccessPage(root: HTMLElement): void {
     t("enquiry.submit")
   ) as HTMLButtonElement;
 
-  const h1 = el("h1", { class: mustClass(styles, "h1") }, t("enquiry.h1")) as HTMLHeadingElement;
-  const p = el("p", { class: mustClass(styles, "p") }, t("enquiry.p")) as HTMLParagraphElement;
+  const h1 = el("h1", { class: mustClass(styles, "h1") }, t("enquiry.h1"));
+  const p = el("p", { class: mustClass(styles, "p") }, t("enquiry.p"));
 
+  /**
+   * Locale refresh:
+   * - This page uses placeholders for most labels to preserve the clean visual style.
+   * - When locale changes, we update text/placeholder content in-place.
+   */
   const refresh = (): void => {
     h1.textContent = t("enquiry.h1");
     p.textContent = t("enquiry.p");
-
     firstName.placeholder = t("enquiry.first_name");
     lastName.placeholder = t("enquiry.last_name");
     email.placeholder = t("enquiry.email");
     phone.placeholder = t("enquiry.phone");
     message.placeholder = t("enquiry.message");
-
     submitBtn.textContent = t("enquiry.submit");
   };
 
@@ -283,20 +262,20 @@ export function renderRequestAccessPage(root: HTMLElement): void {
 
   form.append(h1, p, status, firstName, lastName, email, phone, message, submitBtn);
 
+  // Keep handler sync; launch async explicitly.
   form.addEventListener("submit", (e) => {
     e.preventDefault();
 
     clear(status);
-    status.textContent = "";
 
-    const fn = readValue(form, "firstName");
+    const first = readValue(form, "firstName");
     const ph = readValue(form, "phone");
 
     const payload: EnquiryPayload = {
       lastName: readValue(form, "lastName"),
       email: readValue(form, "email"),
       message: readValue(form, "message"),
-      ...(fn ? { firstName: fn } : {}),
+      ...(first ? { firstName: first } : {}),
       ...(ph ? { phone: ph } : {}),
     };
 
@@ -304,8 +283,12 @@ export function renderRequestAccessPage(root: HTMLElement): void {
 
     void (async () => {
       try {
-        const out = await submit(payload);
-        const msg = t("enquiry.submitted_ref").replace("{ref}", out.lead_id);
+        // Canonical request path for site surface enquiries:
+        // - Always goes through http-client
+        // - expectOk() throws HttpClientError for any {ok:false} response
+        const data = expectOk(await httpPost<EnquiryResponse>("/api/site/enquiry", payload));
+
+        const msg = t("enquiry.submitted_ref").replace("{ref}", data.lead_id);
 
         status.textContent = msg;
         form.reset();
@@ -314,21 +297,39 @@ export function renderRequestAccessPage(root: HTMLElement): void {
           kind: "success",
           title: t("tooltip.success_title"),
           message: msg,
-          onOk: () => {
-            window.location.assign("/");
-          },
+          onOk: () => window.location.assign("/"),
         });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : t("enquiry.failed_generic");
+      } catch (err: unknown) {
+        // Standardized HTTP/network failures:
+        // - server envelope ok:false
+        // - NETWORK_ERROR / INVALID_RESPONSE, etc.
+        if (err instanceof HttpClientError) {
+          const msg = err.message || t("enquiry.failed_generic");
+
+          status.textContent = msg;
+
+          showTooltip({
+            kind: "error",
+            title: t("tooltip.error_title"),
+            message: msg,
+            onOk: () => window.location.assign("/"),
+          });
+
+          return;
+        }
+
+        // Programmer bug: surface it in console, show generic error to user.
+        // eslint-disable-next-line no-console
+        console.error("[request-access] unexpected error", err);
+
+        const msg = t("enquiry.failed_generic");
         status.textContent = msg;
 
         showTooltip({
           kind: "error",
           title: t("tooltip.error_title"),
           message: msg,
-          onOk: () => {
-            window.location.assign("/");
-          },
+          onOk: () => window.location.assign("/"),
         });
       } finally {
         submitBtn.disabled = false;
@@ -336,6 +337,5 @@ export function renderRequestAccessPage(root: HTMLElement): void {
     })();
   });
 
-  const page = el("div", { class: mustClass(styles, "page") }, form);
-  root.append(renderShell(page));
+  root.append(renderShell(el("div", { class: mustClass(styles, "page") }, form)));
 }

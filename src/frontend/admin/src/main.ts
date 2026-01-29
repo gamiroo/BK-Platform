@@ -1,14 +1,17 @@
 // src/frontend/admin/src/main.ts
 // Admin surface entrypoint
 
-const appAdmin = document.querySelector<HTMLDivElement>("#app");
-if (!appAdmin) {
-  throw new Error("Missing #app element.");
-}
+import "../../../shared/theme/globals.css";
+import "../../../shared/theme/tokens.css";
+import "../../../shared/theme/motion.css";
 
-appAdmin.innerHTML = `
-  <main style="font-family: system-ui; padding: 24px;">
-    <h1>Admin Dashboard</h1>
-    <p>Admin surface is wired.</p>
-  </main>
-`;
+import { initTheme } from "../../shared/theme.js";
+import { startAdminApp } from "./app.js";
+
+initTheme();
+
+const root = document.getElementById("app");
+if (!root) throw new Error("Missing #app root");
+
+startAdminApp(root);
+

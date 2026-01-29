@@ -1,0 +1,6 @@
+.line {
+  height: 12px;
+  border-radius: 999px;
+  background: var(--bk-surface-hover);
+  opacity: 0.85;
+}

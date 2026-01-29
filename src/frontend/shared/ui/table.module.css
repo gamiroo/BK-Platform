@@ -1,0 +1,27 @@
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  overflow: hidden;
+}
+
+.th {
+  text-align: left;
+  font-size: var(--bk-font-size-sm);
+  opacity: 0.8;
+  padding: var(--bk-space-2) var(--bk-space-2);
+  border-bottom: 1px solid var(--bk-border);
+  font-weight: 900;
+}
+
+.tbody {
+}
+
+.tr:hover {
+  background: var(--bk-surface-hover);
+}
+
+.td {
+  padding: var(--bk-space-2) var(--bk-space-2);
+  border-bottom: 1px solid var(--bk-border);
+  vertical-align: top;
+}

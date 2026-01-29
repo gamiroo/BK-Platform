@@ -1,0 +1,28 @@
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--bk-border);
+  background: var(--bk-surface);
+  font-size: var(--bk-font-size-sm);
+  font-weight: 900;
+  line-height: 1;
+}
+
+.success {
+  border-color: rgba(46, 204, 113, 0.35);
+}
+
+.warn {
+  border-color: rgba(241, 196, 15, 0.35);
+}
+
+.danger {
+  border-color: rgba(231, 76, 60, 0.35);
+}
+
+.info {
+  border-color: rgba(52, 152, 219, 0.35);
+}

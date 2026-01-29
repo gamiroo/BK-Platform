@@ -10,6 +10,11 @@
 //     site -> no auth required
 //     client/admin -> auth required
 // - Else (no identity hook), auth is NOT required (Day 0 public mode).
+//
+// NOTE ON "reason ids":
+// Some security failures include a stable `details.reason` value so tests and
+// downstream clients can differentiate expected failure modes without parsing
+// human strings. These reason ids MUST stay stable once introduced.
 
 import type { RequestContext } from "../../logging/request-context.js";
 import { securityLogger } from "../../logging/security-logger.js";
@@ -28,15 +33,29 @@ import type { BalanceGuardOptions, Actor, Surface } from "./types.js";
 
 export type BalanceGuardHandler = (ctx: RequestContext, req: Request) => Promise<Response>;
 
+/**
+ * Default route key used by the rate limiter when no custom routeKey is provided.
+ * Keeps rate limits deterministic across server instances.
+ */
 function defaultRouteKey(req: Request): string {
   const u = new URL(req.url);
   return `${req.method}:${u.pathname}`;
 }
 
+/**
+ * Default auth behavior depends on surface:
+ * - site: public by default
+ * - client/admin: authenticated by default (but only once identity is in play)
+ */
 function defaultRequireAuth(surface: Surface): boolean {
   return surface !== "site";
 }
 
+/**
+ * Compute requireAuth, respecting explicit opts.requireAuth first.
+ * If identity resolution is active (resolveActor is provided), we apply surface defaults.
+ * Otherwise, Day 0 public mode allows handler execution (tests depend on this).
+ */
 function computeRequireAuth(opts: BalanceGuardOptions): boolean {
   if (opts.requireAuth !== undefined) return opts.requireAuth;
 
@@ -47,6 +66,15 @@ function computeRequireAuth(opts: BalanceGuardOptions): boolean {
   return false;
 }
 
+/**
+ * Canonical BalanceGuard wrapper.
+ *
+ * Key guarantees:
+ * - OPTIONS preflight is handled before origin/csrf/rate-limit
+ * - Origin/CSRF/rate-limit enforced before handler
+ * - Errors normalized and returned in a consistent JSON envelope
+ * - CORS headers applied to all responses (including errors)
+ */
 export function balanceguard(opts: BalanceGuardOptions, handler: BalanceGuardHandler): BalanceGuardHandler {
   return async (ctx, req) => {
     const ip = extractIp(req);
@@ -63,7 +91,6 @@ export function balanceguard(opts: BalanceGuardOptions, handler: BalanceGuardHan
       if (req.method === "OPTIONS") {
         return preflightResponse(opts.surface, req);
       }
-
 
       // Origin
       if (opts.requireOrigin) {
@@ -94,16 +121,22 @@ export function balanceguard(opts: BalanceGuardOptions, handler: BalanceGuardHan
 
       // Auth (see policy above)
       if (computeRequireAuth(opts) && actor.type === "anon") {
+        // IMPORTANT:
+        // Provide a stable reason id for tests + deterministic client handling.
+        // Do NOT include secrets, tokens, cookies, or stack traces here.
         throw new AppError({
           code: "AUTH_REQUIRED",
           status: 401,
           message: "Auth required",
+          details: {
+            reason: "req_auth_1",
+            surface: opts.surface,
+          },
         });
       }
 
       const res = await handler(ctx, req);
       return applyCorsHeaders(opts.surface, req, res);
-
     } catch (err) {
       const n = normalizeError(err);
 
@@ -118,7 +151,6 @@ export function balanceguard(opts: BalanceGuardOptions, handler: BalanceGuardHan
 
       const res = toHttpErrorResponse(ctx, n);
       return applyCorsHeaders(opts.surface, req, res);
-
     }
   };
 }

@@ -1,42 +1,69 @@
 // src/shared/errors/http-error-response.ts
 /**
- * Convert a normalized error into a safe HTTP JSON response.
+ * Convert a NormalizedError into the canonical HTTP JSON envelope.
  *
- * Contract (tests enforce):
- * - JSON: { ok:false, request_id, error:{ code, message } }
- * - Header: x-request-id must equal ctx.request_id
- * - MUST NOT leak internal logMessage/details
+ * Why this exists:
+ * - Keep *all* error responses consistent across transports (BalanceGuard, server adapter, etc.)
+ * - Always include request_id for support/debug correlation
+ * - Never leak internal details to clients
  *
- * Special-case:
- * - AUTH_REQUIRED includes error.request_id for identity/authz test.
+ * Contract (tests rely on this):
+ * - Response status = n.status
+ * - Header: content-type = application/json; charset=utf-8
+ * - Header: x-request-id = ctx.request_id
+ * - Body:
+ *   {
+ *     ok: false,
+ *     request_id: string,
+ *     error: { code: string, message: string, details?: object }
+ *   }
+ *
+ * Security rule:
+ * - INTERNAL_ERROR must NEVER include error.details (even if normalizeError collected them for logs).
  */
 
 import type { RequestContext } from "../logging/request-context.js";
 import type { NormalizedError } from "./normalize-error.js";
 
-export function toHttpErrorResponse(ctx: RequestContext, err: NormalizedError): Response {
-  const baseError: { code: string; message: string; request_id?: string } = {
-    code: err.code,
-    message: err.publicMessage,
-  };
+type PublicErrorBody = Readonly<{
+  ok: false;
+  request_id: string;
+  error: Readonly<{
+    code: NormalizedError["code"];
+    message: string;
+    details?: Record<string, unknown>;
+  }>;
+}>;
 
-  // Only include nested request_id for AUTH_REQUIRED to satisfy that one contract test
-  // without breaking deepEqual expectations for other error codes.
-  if (err.code === "AUTH_REQUIRED") {
-    baseError.request_id = ctx.request_id;
-  }
+function buildBody(ctx: RequestContext, n: NormalizedError): PublicErrorBody {
+  const baseError = {
+    code: n.code,
+    message: n.publicMessage,
+  } as const;
 
-  const body = {
-    ok: false as const,
+  // Only include details for *expected* errors.
+  // INTERNAL_ERROR is always generic and must not include details.
+  const error =
+    n.code !== "INTERNAL_ERROR" && n.details
+      ? ({ ...baseError, details: n.details } as const)
+      : baseError;
+
+  return {
+    ok: false,
     request_id: ctx.request_id,
-    error: baseError,
+    error,
   };
+}
+
+export function toHttpErrorResponse(ctx: RequestContext, n: NormalizedError): Response {
+  const body = buildBody(ctx, n);
+
+  const headers = new Headers();
+  headers.set("content-type", "application/json; charset=utf-8");
+  headers.set("x-request-id", ctx.request_id);
 
   return new Response(JSON.stringify(body), {
-    status: err.status,
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      "x-request-id": ctx.request_id,
-    },
+    status: n.status,
+    headers,
   });
 }
