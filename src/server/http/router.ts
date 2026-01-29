@@ -7,12 +7,12 @@
 //
 // This file is intentionally small and boring: reliability > features.
 
-import type { RequestContext } from "@/shared/logging/request-context.js";
-import { jsonError } from "@/shared/http/responses.js";
+import type { RequestContext } from "../../shared/logging/request-context.js";
+import { jsonError } from "../../shared/http/responses.js";
 
 export type RouteHandler = (ctx: RequestContext, req: Request) => Promise<Response>;
 
-type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS";
 
 type RouteKey = `${Method} ${string}`;
 
@@ -38,6 +38,10 @@ export class Router {
   delete(path: string, handler: RouteHandler): void {
     this.routes.set(key("DELETE", path), handler);
   }
+  options(path: string, handler: RouteHandler): void {
+    this.routes.set(key("OPTIONS", path), handler);
+  }
+
 
   /**
    * Dispatch the request to a handler.
@@ -52,6 +56,6 @@ export class Router {
       return jsonError(ctx, 404, "NOT_FOUND", `No route for ${method} ${url.pathname}`);
     }
 
-    return route(ctx, req);
+    return await route(ctx, req);
   }
 }

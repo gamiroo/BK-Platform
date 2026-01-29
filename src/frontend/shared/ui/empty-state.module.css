@@ -1,0 +1,23 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--bk-space-2);
+  padding: var(--bk-space-4);
+  border-radius: var(--bk-radius-4);
+  border: 1px dashed var(--bk-border);
+  background: transparent;
+}
+
+.icon {
+  font-size: 22px;
+  opacity: 0.9;
+}
+
+.title {
+  font-weight: 950;
+}
+
+.body {
+  opacity: 0.85;
+  line-height: 1.6;
+}

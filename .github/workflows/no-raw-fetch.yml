@@ -1,0 +1,22 @@
+name: no-raw-fetch
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  enforce:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Enforce no raw fetch in UI
+        run: node scripts/no-raw-fetch.mjs

@@ -1,0 +1,42 @@
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.hero {
+  padding: 28px;
+  border: 1px solid var(--bk-border, rgba(255,255,255,0.08));
+  border-radius: 16px;
+  background: var(--bk-surface, rgba(255,255,255,0.06));
+}
+
+.h1 {
+  margin: 0 0 10px 0;
+  font-size: 36px;
+  line-height: 1.1;
+}
+
+.lede {
+  margin: 0 0 18px 0;
+  font-size: 16px;
+  opacity: 0.9;
+}
+
+.ctaRow {
+  display: flex;
+  gap: 12px;
+}
+
+.cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 14px;
+  border-radius: 12px;
+  text-decoration: none;
+  border: 1px solid var(--bk-border, rgba(255,255,255,0.16));
+  background: var(--bk-accent, #D3AF37);
+  color: #111;
+  font-weight: 700;
+}

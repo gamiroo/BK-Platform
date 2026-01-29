@@ -1,44 +1,52 @@
 // src/shared/http/responses.ts
-// Response helpers for the framework-free Node runtime.
-// We use Web Fetch API Responses (Node 20+ has Response globally).
-//
-// Design goals:
-// - Always return JSON in a consistent envelope
-// - Always include request_id (observability)
-// - Avoid leaking internal errors
+/**
+ * Canonical JSON response helpers.
+ *
+ * Contract (tests enforce):
+ * - ok=true:  { ok:true, request_id, data }
+ * - ok=false: { ok:false, request_id, error:{ code, message } }
+ * - Header: x-request-id must equal ctx.request_id
+ *
+ * Special-case:
+ * - AUTH_REQUIRED includes error.request_id for identity/authz test.
+ */
 
 import type { RequestContext } from "../logging/request-context.js";
 
-export function json(
-  ctx: RequestContext,
-  data: unknown,
-  init?: Omit<ResponseInit, "headers"> & { headers?: Record<string, string> }
-): Response {
-  const headers = new Headers(init?.headers ?? {});
-  headers.set("content-type", "application/json; charset=utf-8");
-  headers.set("x-request-id", ctx.request_id);
+export function json<T>(ctx: RequestContext, data: T, status = 200): Response {
+  const body = {
+    ok: true as const,
+    request_id: ctx.request_id,
+    data,
+  };
 
-  // Never return undefined at the top-level JSON position (some clients mishandle it)
-  const body = JSON.stringify({ ok: true, request_id: ctx.request_id, data });
-
-  return new Response(body, { ...init, headers });
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "x-request-id": ctx.request_id,
+    },
+  });
 }
 
-export function jsonError(
-  ctx: RequestContext,
-  status: number,
-  code: string,
-  message: string
-): Response {
-  const headers = new Headers();
-  headers.set("content-type", "application/json; charset=utf-8");
-  headers.set("x-request-id", ctx.request_id);
+export function jsonError(ctx: RequestContext, status: number, code: string, message: string): Response {
+  const err: { code: string; message: string; request_id?: string } = { code, message };
 
-  const body = JSON.stringify({
-    ok: false,
+  if (code === "AUTH_REQUIRED") {
+    err.request_id = ctx.request_id;
+  }
+
+  const body = {
+    ok: false as const,
     request_id: ctx.request_id,
-    error: { code, message },
-  });
+    error: err,
+  };
 
-  return new Response(body, { status, headers });
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "x-request-id": ctx.request_id,
+    },
+  });
 }

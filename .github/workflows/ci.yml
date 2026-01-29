@@ -21,6 +21,9 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
+      - name: Enforce no raw fetch in UI
+        run: node scripts/no-raw-fetch.mjs
+
       - name: Typecheck
         run: pnpm typecheck
 

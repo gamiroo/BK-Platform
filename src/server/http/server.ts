@@ -33,13 +33,42 @@ async function readBody(req: http.IncomingMessage): Promise<Buffer | undefined> 
   });
 }
 
+type Surface = "site" | "client" | "admin";
+
+function routeSurface(pathname: string): Readonly<{ surface: Surface; strippedPathname: string }> {
+  // Mirror the Vercel catch-all behavior:
+  // /api/<surface>/<anything> -> /<anything>
+  // /api/<surface> -> /
+  if (pathname === "/api/admin" || pathname.startsWith("/api/admin/")) {
+    const rest = pathname.slice("/api/admin".length);
+    return { surface: "admin", strippedPathname: rest.length ? rest : "/" };
+  }
+
+  if (pathname === "/api/client" || pathname.startsWith("/api/client/")) {
+    const rest = pathname.slice("/api/client".length);
+    return { surface: "client", strippedPathname: rest.length ? rest : "/" };
+  }
+
+  if (pathname === "/api/site" || pathname.startsWith("/api/site/")) {
+    const rest = pathname.slice("/api/site".length);
+    return { surface: "site", strippedPathname: rest.length ? rest : "/" };
+  }
+
+  // Default:
+  // - Treat non-/api paths as "site" (useful for /health, /, etc. during early dev)
+  return { surface: "site", strippedPathname: pathname };
+}
+
 /**
  * Convert node:http request into a Fetch API Request.
  * Node 20 provides global Request/Response.
  */
-async function toFetchRequest(req: http.IncomingMessage): Promise<Request> {
+async function toFetchRequest(req: http.IncomingMessage, overriddenPathname: string): Promise<Request> {
   const host = req.headers.host ?? "localhost";
-  const url = new URL(req.url ?? "/", `http://${host}`);
+  const original = new URL(req.url ?? "/", `http://${host}`);
+
+  // Apply our normalized pathname for routing
+  original.pathname = overriddenPathname;
 
   const headers = new Headers();
   for (const [k, v] of Object.entries(req.headers)) {
@@ -55,7 +84,7 @@ async function toFetchRequest(req: http.IncomingMessage): Promise<Request> {
   // DOM BodyInit typings don't accept Buffer directly; convert to Uint8Array.
   if (body) init.body = new Uint8Array(body);
 
-  return new Request(url.toString(), init);
+  return new Request(original.toString(), init);
 }
 
 /**
@@ -75,41 +104,51 @@ async function writeNodeResponse(res: http.ServerResponse, out: Response): Promi
 }
 
 export function startHttpServer(port: number): http.Server {
-  // Router setup
-  const router = new Router();
+  // Surface routers (avoid collisions in the single Router map)
+  const siteRouter = new Router();
+  const clientRouter = new Router();
+  const adminRouter = new Router();
 
-  // Register surface route modules
-  registerSiteRoutes(router);
-  registerClientRoutes(router);
-  registerAdminRoutes(router);
+  registerSiteRoutes(siteRouter);
+  registerClientRoutes(clientRouter);
+  registerAdminRoutes(adminRouter);
 
   const server = http.createServer((req, res) => {
     const ctx = createRequestContext();
 
     runWithRequestContext(ctx, () => {
-      // IMPORTANT:
-      // - node:http expects a void-returning request listener
-      // - ALS context should be established synchronously
-      // - then we launch async work explicitly
       void (async () => {
         try {
-          const fetchReq = await toFetchRequest(req);
+          const host = req.headers.host ?? "localhost";
+          const url = new URL(req.url ?? "/", `http://${host}`);
+          const routed = routeSurface(url.pathname);
+
+          const fetchReq = await toFetchRequest(req, routed.strippedPathname);
 
           logger.info(
-            { request_id: ctx.request_id, method: fetchReq.method, url: fetchReq.url },
+            {
+              request_id: ctx.request_id,
+              method: fetchReq.method,
+              url: fetchReq.url,
+              surface: routed.surface,
+              original_path: url.pathname,
+              routed_path: routed.strippedPathname,
+            },
             "http_request"
           );
 
-          // Router returns a Response. BalanceGuard-wrapped handlers will also return Responses.
+          const router =
+            routed.surface === "admin"
+              ? adminRouter
+              : routed.surface === "client"
+                ? clientRouter
+                : siteRouter;
+
           const fetchRes = await router.handle(ctx, fetchReq);
 
-          // Apply security headers ONCE, as the final step for every response.
           const finalRes = applySecurityHeaders(fetchRes);
-
           await writeNodeResponse(res, finalRes);
         } catch (err) {
-          // Transport adapter safety net: if anything escapes BalanceGuard/router,
-          // we normalize and fail closed with a safe JSON response.
           const n = normalizeError(err);
 
           logger.error(

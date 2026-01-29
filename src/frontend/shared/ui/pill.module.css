@@ -1,0 +1,22 @@
+.pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--bk-border);
+  background: var(--bk-surface);
+  font-size: var(--bk-font-size-sm);
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.neutral {
+  opacity: 0.9;
+}
+
+.accent {
+  background: var(--bk-accent);
+  color: var(--bk-accent-contrast);
+  border-color: rgba(0,0,0,0.08);
+}

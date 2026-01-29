@@ -1,0 +1,25 @@
+.page {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: var(--bk-space-5);
+  border-radius: var(--bk-radius-4);
+  border: 1px solid var(--bk-border);
+  background: var(--bk-surface);
+  box-shadow: var(--bk-shadow-1);
+}
+
+.h1 {
+  margin: 0 0 var(--bk-space-2) 0;
+  font-size: var(--bk-font-size-2xl);
+}
+
+.p {
+  margin: 0 0 var(--bk-space-4) 0;
+  opacity: 0.85;
+}
+
+.link {
+  text-decoration: none;
+  color: var(--bk-fg);
+  font-weight: 900;
+}

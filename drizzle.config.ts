@@ -20,7 +20,6 @@ const url = process.env.DATABASE_URL ?? "";
 if (!url) {
   // Do not throw here; CI may lint/typecheck without DB credentials.
   // Commands that require DB connectivity (migrate/introspect) will fail fast at runtime.
-  // eslint-disable-next-line no-console
   console.warn("[drizzle.config] DATABASE_URL is not set (ok for CI lint/typecheck).");
 }
 
