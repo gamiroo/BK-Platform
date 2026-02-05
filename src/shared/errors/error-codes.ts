@@ -17,6 +17,7 @@ export type ErrorCode =
   | "BAD_REQUEST"
   | "UNAUTHORIZED"
   | "UNAUTHENTICATED"
+  | "AUTH_INVALID"
   | "FORBIDDEN"
   | "CONFLICT"
   | "RATE_LIMITED"
@@ -37,10 +38,13 @@ export type ErrorCode =
   | "ENQUIRY_INVALID_BODY"
   | "ENQUIRY_MISSING_FIELDS"
   | "METHOD_NOT_ALLOWED"
+  | "MISCONFIGURED"
 
   // Database
   | "DB_CONNECTION_FAILED"
   | "DB_QUERY_FAILED"
+  | "DB_MIGRATION_REQUIRED"
+  | "DB_ENV_MARKER_TABLE_MISSING"
   
   // Zoho CRM
   | "ZOHO_AUTH_FAILED"
@@ -51,4 +55,8 @@ export type ErrorCode =
   | "TRANSLATION_TEXT_TOO_LONG"
   | "TRANSLATION_UNSUPPORTED_LANGUAGE_PAIR"
   | "TRANSLATION_PROVIDER_UNAVAILABLE"
-  | "TRANSLATION_FAILED";
+  | "TRANSLATION_FAILED"
+
+  // Stripe Billing Webhooks
+  // (add more as needed)
+  | "INPUT_INVALID";

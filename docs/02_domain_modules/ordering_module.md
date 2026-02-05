@@ -120,6 +120,24 @@ Ordering maintains a derived window state:
 
 Window state is computed from current time and configured schedule.
 
+### 3.4 Week Identity (Canonical `week_id`) (Mandatory)
+
+Ordering MUST compute a stable `week_id` for every request using the kitchen timezone.
+
+Canonical rule (v1):
+
+- `week_id` is the ISO week of the kitchen timezone timestamp at request time.
+- Additionally store:
+  - `week_start_at` (kitchen tz, Friday 12:00 PM)
+  - `window_close_at` (kitchen tz, Monday 12:00 AM)
+  - `production_cutoff_at` (kitchen tz, Monday 09:00 AM default)
+
+Locked rules:
+
+- All window gating and uniqueness constraints MUST use `(account_id, week_id)`.
+- `week_id` calculation must be deterministic and centrally implemented (shared helper).
+- UI must not supply `week_id`; server computes it.
+
 ---
 
 ## 4. Order Lifecycle (State Machine)
@@ -179,6 +197,12 @@ Ordering must enforce the following **before** any creation, update, or confirm:
 - Account must have **pack balance > 0**.
 - The maximum number of meals ordered must not exceed pack balance.
 
+Commit-time enforcement (Mandatory):
+
+- Pack balance validation during draft/edit is advisory only.
+- The definitive pack balance check MUST occur during confirm inside the confirm transaction (see 6.2).
+- Confirm must fail closed if balance is insufficient at commit time, even if the draft previously validated.
+
 ### 5.2 Subscription Active Gate (Derived)
 
 - Subscription is considered **active only while pack balance remains**.
@@ -217,15 +241,59 @@ Rationale:
 
 **Locked credit consumption:**
 
+### 6.2 Locked-credit consumption representation (Mandatory)
+
+When an order is confirmed, the system MUST record the economic consumption in an auditable form.
+
+If Credits ledger is implemented:
+
+- Insert ledger entries (locked class) representing the meals consumed for this order.
+- Each consumption entry MUST reference:
+  - `reference_type = order`
+  - `reference_id = order_id`
+  - `amount = -<meals_consumed>`
+  - deterministic `idempotency_key` per order confirm:
+    `order:<order_id>:confirm:consume`
+
+If Credits ledger is not yet implemented:
+
+- Ordering MUST still persist an auditable consumption record (e.g. `ordering_pack_consumptions`)
+  that can be reconciled and migrated into Credits later.
+- Silent decrements without a durable record are forbidden.
+
+Database hardening (Recommended):
+
+- `order_events` SHOULD include a deterministic `event_key` (text) for idempotent transitions
+  (e.g., `ORDER_CONFIRMED:<order_id>`), with a unique constraint per order.
+- Alternatively, enforce confirm idempotency by transactionally checking `orders.status`
+  and writing a single `ORDER_CONFIRMED` event in the same DB transaction as pack consumption.
+
 When pack meals decrement on confirmation, the system implicitly consumes the corresponding **locked credits** (pack-backed meal value).  
 Unlocked credits are never consumed by Ordering to purchase meals.
 
-### 6.2 Idempotency Requirements
+### 6.3 Confirm Commit: Atomicity + Idempotency (Mandatory)
 
-Confirm operations must be **idempotent**.
+Confirm is the canonical economic "commit" point and MUST be implemented as a single atomic operation.
 
-- Repeated confirm requests must not consume packs multiple times.
-- Confirm must use a deterministic idempotency key (order_id + state transition).
+Within one DB transaction:
+
+1) Re-load the order row with a lock (`SELECT ... FOR UPDATE`) by `order_id`.
+2) Validate:
+   - window is open
+   - order is currently `DRAFT`
+   - `(account_id, week_id)` uniqueness holds
+   - pack balance is sufficient at commit time
+3) Resolve presets deterministically (canonical allocation).
+4) Apply pack consumption / locked-credit consumption (see 6.3).
+5) Transition state `DRAFT -> CONFIRMED`.
+6) Emit canonical events (see Section 12) in an outbox-safe way (see 12.4).
+
+Idempotency rules (locked):
+
+- Confirm MUST require an `idempotency_key`.
+- The system MUST enforce uniqueness on `(account_id, idempotency_key)` for confirm operations.
+- Duplicate keys MUST return the original confirmed order summary and MUST NOT consume packs again.
+- A confirmed order is terminal for confirm: repeated confirms are a no-op.
 
 ---
 
@@ -244,6 +312,10 @@ Confirm operations must be **idempotent**.
 ### 7.3 One Order Constraint
 
 - The system must enforce a uniqueness rule for: (account_id, week_id).
+Schema alignment:
+- The schema enforces uniqueness on (`account_id`,`week_id`) in `orders`.
+- Ordering must treat uniqueness violations as a safe, deterministic outcome:
+  - return the existing order rather than creating a second order.
 
 ---
 
@@ -361,6 +433,26 @@ Note:
 
 - If Credits ledger exists, reversals should be expressed as ledger adjustments.
 
+### 10.3.1 Cancellation atomicity + reversal keys (Mandatory)
+
+Cancellation is a state transition with economic reversal and MUST be atomic.
+
+Within one DB transaction:
+
+1) Lock order row (`FOR UPDATE`).
+2) Validate cancellation window (state + time).
+3) Transition order to `CANCELLED`.
+4) Apply economic reversal:
+   - restore pack meals / reverse locked-credit consumption
+5) Emit audit events with authorizing actor + reason.
+
+Idempotency rules (locked):
+
+- Cancellation MUST require an `idempotency_key` (AM/admin actions included).
+- Duplicate cancellation keys MUST return the same result and MUST NOT double-restore meals.
+- Reversals MUST reference the original confirm consumption via a deterministic reversal key:
+  `order:<order_id>:cancel:reverse`
+
 ### 10.4 Late Ordering (Missed Cut‑Off)
 
 Current policy:
@@ -373,6 +465,14 @@ Current policy:
 Future policy:
 
 - Voucher-based late ordering (consumable, time-bound)
+
+Voucher redemption (Mandatory):
+
+- Voucher redemption endpoints are state-changing and MUST:
+  - require auth + origin + csrf
+  - be rate-limited
+  - be idempotent by `(account_id, voucher_item_id)`
+- Redemption must emit an event with reason + authorizing actor.
 
 All late-order exceptions must:
 
@@ -389,6 +489,15 @@ Late ordering may also be authorized by a Reward Shop **late-order voucher**:
 - voucher redemption must be audited and idempotent
 - See `reward_shop_module.md` for voucher authorization rules.
 - Reward Shop items are defined in `reward_shop_module.md`.
+
+Late-order authorization record (Mandatory, future-ready):
+
+- Voucher redemption MUST create a durable authorization record such as:
+  `ordering_late_order_authorizations(account_id, week_id, item_id, granted_until, granted_by, created_at)`
+- Ordering must treat this record as the sole authority for late ordering.
+- Authorization is week-scoped:
+  - only applies to `(account_id, week_id)` where the voucher was redeemed
+- Authorization must never modify pack balance.
 
 ---
 
@@ -460,6 +569,20 @@ Every meaningful state transition or exception emits an event.
 - `ORDER_PACK_REVERSAL_APPLIED`
 - `ORDER_PROMO_ENTITLEMENT_GRANTED`
 
+### 12.4 Event emission reliability (Mandatory)
+
+All Ordering events MUST be emitted exactly-once relative to the persisted state transition.
+
+Locked rules:
+
+- Events MUST be written transactionally with the state change (outbox pattern recommended).
+- Event rows MUST include a deterministic `event_key` to prevent duplicates, e.g.:
+  - `order:<order_id>:confirmed`
+  - `order:<order_id>:cancelled`
+  - `order:<order_id>:locked`
+- Unique constraint on `event_key` is mandatory.
+- Transport retries MUST be safe and must not produce duplicate events.
+
 All events include:
 
 - actor
@@ -499,6 +622,96 @@ Resource-level authorization is mandatory:
 - customer may only access their own order
 - admin/AM access must be explicit and audited
 
+## 14.1 Authority Boundaries (Locked)
+
+Ordering coordinates weekly execution but does not own the underlying economic ledgers.
+The following authority boundaries are **non-negotiable**.
+
+### 14.1.1 Authority of Truth (What is authoritative)
+
+- **Ordering is authoritative for:**
+  - weekly window gating (`WINDOW_OPEN` / `WINDOW_CLOSED`)
+  - weekly order identity (`week_id`) and the **one-order-per-week** constraint
+  - the order lifecycle state machine (`DRAFT → CONFIRMED → LOCKED → FULFILLED/CANCELLED`)
+  - deterministic preset resolution at confirm time
+  - recording *that* a meal commitment occurred (confirm/cancel semantics)
+
+- **Packs is authoritative for:**
+  - pack catalogue and pack purchase meaning
+  - pack availability as an entitlement concept (economic anchor)
+  - any pack-derived policy (e.g. pack expiry semantics)
+
+- **Credits is authoritative for:**
+  - credit ledger truth (append-only)
+  - credit class separation (locked vs unlocked)
+  - idempotent, concurrency-safe consume / reverse operations
+  - balance projections (derived views)
+
+- **Reward Shop is authoritative for:**
+  - item catalogue and exchange policy (unlocked credits → items)
+  - item inventory (issue, redeem, expire, revoke)
+  - purchase/redeem idempotency and anti-abuse policy
+
+- **Billing is authoritative for:**
+  - Stripe signature verification, webhook idempotency claim
+  - billing transaction facts (paid/refunded/failed) and provider IDs
+
+### 14.1.2 Economic Mutation Rules (What Ordering may mutate)
+
+Ordering MUST NOT directly mutate pack balances or credit balances via ad-hoc updates.
+
+Locked rules:
+
+- Ordering MAY only cause **economic effects** via:
+  1) **Packs use-cases** (pack consumption / reversal), OR
+  2) **Credits use-cases** (locked-credit consumption / reversal) when Credits exists.
+
+- All economic effects MUST be:
+  - atomic with the order state transition
+  - idempotent under retries (deterministic keys)
+  - concurrency-safe (double-spend resistant)
+
+### 14.1.3 Locked Credits vs Unlocked Credits (Non-interchangeable)
+
+- Ordering MUST treat **locked credits** as the only credit class relevant to meal commitment.
+- Ordering MUST NEVER consume **unlocked credits** for meals.
+- Ordering MUST NEVER derive unlocked credits from locked credits (unlocking is explicit and belongs to Credits policy).
+
+### 14.1.4 Reward Shop Items Do Not Modify Orders Directly
+
+Reward Shop never edits orders and never changes ordering state by itself.
+
+Locked rules:
+
+- Reward Shop outputs **items**, not order mutations.
+- Ordering may accept a Reward Shop item only through an explicit Ordering-side
+  authorization record (e.g., late-order eligibility), created by a dedicated redemption flow.
+- Items MUST be consumed/redeemed exactly-once and must be week-scoped when applicable.
+
+### 14.1.5 Derived Eligibility vs Source-of-Truth State
+
+Ordering enforces *derived* eligibility gates but is not the source of truth for their upstream state.
+
+- Pack Gate:
+  - Ordering enforces “pack balance > 0” as a hard gate.
+  - The authoritative pack state belongs to Packs/Credits (depending on implementation).
+
+- Subscription Active Gate:
+  - Ordering enforces subscription capability gates and the “active while pack remains” rule.
+  - The authoritative subscription lifecycle belongs to Subscriptions.
+
+### 14.1.6 Cross-module Side Effects (How effects must flow)
+
+Canonical side-effect flow:
+
+- **Customer action** (confirm/cancel/redeem) → Ordering use-case
+- Ordering validates window + state and then calls:
+  - Packs/Credits for economic commit/reversal (atomic + idempotent)
+  - Reward Shop inventory for item redemption (atomic + idempotent)
+- Ordering emits Ordering events via outbox keys (exactly-once relative to state)
+
+Any implementation that bypasses these boundaries is invalid by definition.
+
 ---
 
 ## 15. What Ordering Explicitly Forbids
@@ -509,6 +722,9 @@ Resource-level authorization is mandatory:
 - Silent entitlement grants
 - Unlogged overrides or cancellations
 - Lock-time ambiguity (lock is production cutoff)
+- Non-atomic confirm/cancel implementations that can partially apply pack consumption or reversals
+- Any confirm/cancel flow that is not idempotent under client retries / refresh / network flakiness
+- Any design that allows unlocked credits or Reward Shop purchases to affect pack meal consumption
 
 ---
 

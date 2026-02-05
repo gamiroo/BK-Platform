@@ -81,14 +81,14 @@ src/modules/identity/
 
 Identity keeps types small and explicit.
 
-**IdentityUserStatus**
+**IdentityUserStatus:**
 
 - `active` — permitted to authenticate
 - `inactive` — not permitted (business decision)
 - `invited` — not permitted until invite completed
 - `disabled` — explicitly blocked
 
-**IdentityUser**
+**IdentityUser:**
 
 Minimum fields needed to authenticate:
 
@@ -97,7 +97,7 @@ Minimum fields needed to authenticate:
 - `status: IdentityUserStatus`
 - `passwordHash: string | null`
 
-**AuthActor (v1)**
+**AuthActor (v1):**
 
 For v1, the system returns a single actor kind:
 
@@ -121,6 +121,27 @@ Identity must not leak details that help attackers.
 **Important:**
 
 - Do not throw different error types for “email not found” vs “wrong password”.
+
+### 3.3 Password hashing (canonical)
+
+Balance Kitchen stores **password hashes**, not encrypted passwords.
+
+**Canonical algorithm:** **Argon2id** (PHC string format)
+
+- Password hashes MUST be produced using **Argon2id**.
+- Stored value MUST be the full **PHC-formatted hash string** (e.g. `$argon2id$v=19$m=...$salt$hash`).
+- Verification MUST be constant-time and performed via the shared password helper.
+
+Why Argon2id:
+
+- Designed to be memory-hard and resist GPU/ASIC cracking better than older schemes.
+- Safer default for new builds than legacy options.
+
+Migration note (if older hashes exist later):
+
+- The system MAY support a transitional period where it can verify legacy hashes (e.g. scrypt/bcrypt),
+  but on successful login it MUST rehash and upgrade to Argon2id.
+- Do NOT store an “algorithm” column unless you truly need multi-scheme verification; prefer PHC parsing.
 
 ---
 
@@ -295,6 +316,9 @@ Transport responsibilities:
 - ✅ Password verification uses shared password helper
 - ✅ Session token is opaque
 - ✅ Cookie set by transport only
+- ✅ Password verification uses shared password helper
+  - ✅ Hashing scheme is **Argon2id** (PHC string)
+  - ✅ Rehash-on-login supported if legacy hashes are introduced later
 
 ### 8.2 Logout
 

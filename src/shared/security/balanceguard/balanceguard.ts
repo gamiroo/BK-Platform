@@ -1,21 +1,4 @@
 // src/shared/security/balanceguard/balanceguard.ts
-// BalanceGuard (Day 0 implementation)
-//
-// Mandatory wrapper for every real HTTP endpoint.
-// Enforces transport security + safe error normalization.
-//
-// Auth policy (important for tests + Day 0):
-// - If opts.requireAuth is set, we obey it.
-// - Else if opts.resolveActor is provided, we default:
-//     site -> no auth required
-//     client/admin -> auth required
-// - Else (no identity hook), auth is NOT required (Day 0 public mode).
-//
-// NOTE ON "reason ids":
-// Some security failures include a stable `details.reason` value so tests and
-// downstream clients can differentiate expected failure modes without parsing
-// human strings. These reason ids MUST stay stable once introduced.
-
 import type { RequestContext } from "../../logging/request-context.js";
 import { securityLogger } from "../../logging/security-logger.js";
 
@@ -33,48 +16,45 @@ import type { BalanceGuardOptions, Actor, Surface } from "./types.js";
 
 export type BalanceGuardHandler = (ctx: RequestContext, req: Request) => Promise<Response>;
 
-/**
- * Default route key used by the rate limiter when no custom routeKey is provided.
- * Keeps rate limits deterministic across server instances.
- */
 function defaultRouteKey(req: Request): string {
   const u = new URL(req.url);
   return `${req.method}:${u.pathname}`;
 }
 
-/**
- * Default auth behavior depends on surface:
- * - site: public by default
- * - client/admin: authenticated by default (but only once identity is in play)
- */
 function defaultRequireAuth(surface: Surface): boolean {
   return surface !== "site";
 }
 
-/**
- * Compute requireAuth, respecting explicit opts.requireAuth first.
- * If identity resolution is active (resolveActor is provided), we apply surface defaults.
- * Otherwise, Day 0 public mode allows handler execution (tests depend on this).
- */
 function computeRequireAuth(opts: BalanceGuardOptions): boolean {
   if (opts.requireAuth !== undefined) return opts.requireAuth;
-
-  // Only apply default auth rules when identity hook is in play.
-  // Day 0 wrappers/tests without resolveActor must allow handler execution.
   if (opts.resolveActor) return defaultRequireAuth(opts.surface);
-
   return false;
 }
 
 /**
- * Canonical BalanceGuard wrapper.
- *
- * Key guarantees:
- * - OPTIONS preflight is handled before origin/csrf/rate-limit
- * - Origin/CSRF/rate-limit enforced before handler
- * - Errors normalized and returned in a consistent JSON envelope
- * - CORS headers applied to all responses (including errors)
+ * Production detection must be consistent with the rest of the codebase.
+ * (We treat Vercel "production" as production too.)
  */
+function isProdRuntime(): boolean {
+  const nodeEnv = process.env.NODE_ENV;
+  const vercelEnv = process.env.VERCEL_ENV;
+  return nodeEnv === "production" || vercelEnv === "production";
+}
+
+function originsEnvKeyForSurface(surface: Surface): string | null {
+  if (surface === "site") return "BK_ORIGINS_SITE";
+  if (surface === "client") return "BK_ORIGINS_CLIENT";
+  if (surface === "admin") return "BK_ORIGINS_ADMIN";
+  return null;
+}
+
+function hasOriginAllowlistConfigured(surface: Surface): boolean {
+  const key = originsEnvKeyForSurface(surface);
+  if (!key) return true; // should not happen, but don't block on unknown surface
+  const v = process.env[key];
+  return typeof v === "string" && v.trim().length > 0;
+}
+
 export function balanceguard(opts: BalanceGuardOptions, handler: BalanceGuardHandler): BalanceGuardHandler {
   return async (ctx, req) => {
     const ip = extractIp(req);
@@ -87,22 +67,46 @@ export function balanceguard(opts: BalanceGuardOptions, handler: BalanceGuardHan
         url: req.url,
       });
 
-      // CORS preflight must short-circuit BEFORE origin/csrf/rate-limit.
       if (req.method === "OPTIONS") {
         return preflightResponse(opts.surface, req);
       }
 
-      // Origin
-      if (opts.requireOrigin) {
+      /**
+       * ✅ Fail-closed in production if Origin enforcement is enabled but allowlist is missing.
+       *
+       * This is intentionally independent of request method:
+       * - We still do NOT require Origin on safe GET/HEAD when allowlist exists.
+       * - But if the allowlist is missing in prod, we must not silently run "open".
+       *
+       * This is what your failing test asserts.
+       */
+      if (opts.requireOrigin && isProdRuntime() && !hasOriginAllowlistConfigured(opts.surface)) {
+        throw new AppError({
+          code: "ORIGIN_REJECTED",
+          status: 403,
+          message: "Origin rejected",
+          details: { reason: "no_allowlist_configured", surface: opts.surface },
+        });
+      }
+
+      // Origin enforcement should only apply to "unsafe" methods.
+      // Browsers may omit Origin on same-site GET/HEAD navigations (and some dev proxies),
+      // and requiring it breaks /auth/me boot probes and refresh flows.
+      const method = req.method.toUpperCase();
+      const unsafe = method !== "GET" && method !== "HEAD" && method !== "OPTIONS";
+
+      if (opts.requireOrigin && unsafe) {
         enforceOrigin(req, opts.surface);
       }
 
-      // CSRF
+      // CSRF only makes sense for authenticated surfaces.
       if (opts.requireCsrf && req.method !== "GET" && req.method !== "HEAD") {
-        enforceCsrf(req);
+        if (opts.surface === "site") {
+          throw new AppError({ code: "CSRF_INVALID", status: 500, message: "CSRF misconfigured for site surface" });
+        }
+        enforceCsrf(req, opts.surface); // now opts.surface is narrowed
       }
 
-      // Rate limit (before handler)
       if (opts.rateLimit) {
         const routeKey = opts.rateLimit.routeKey ? opts.rateLimit.routeKey(req) : defaultRouteKey(req);
 
@@ -116,14 +120,9 @@ export function balanceguard(opts: BalanceGuardOptions, handler: BalanceGuardHan
         });
       }
 
-      // Identity (hookable)
       const actor: Actor = opts.resolveActor ? await opts.resolveActor(ctx, req) : { type: "anon" };
 
-      // Auth (see policy above)
       if (computeRequireAuth(opts) && actor.type === "anon") {
-        // IMPORTANT:
-        // Provide a stable reason id for tests + deterministic client handling.
-        // Do NOT include secrets, tokens, cookies, or stack traces here.
         throw new AppError({
           code: "AUTH_REQUIRED",
           status: 401,

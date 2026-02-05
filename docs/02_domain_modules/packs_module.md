@@ -1,10 +1,12 @@
 # packs_module.md — Packs (Meal Pack Products) Module
+
 Referenced by balance.md
 > Canonical module specification for **Packs** in Balance Kitchen (BK).
 >
 > **Scope:** Pack product catalogue + pack purchases (entitlements).
 >
 > **This module must align with:**
+>
 > - `balance_kitchen_architecture.md` (DDD boundaries, thin transports, shared-only cross-cutting)
 > - `balance_kitchen_schema.md` (tables + canonical fields)
 > - `balanceguard.md` (route security contract)
@@ -41,44 +43,26 @@ Referenced by balance.md
 
 ## 2. Data Model (Canonical)
 
-Per `balance_kitchen_schema.md`:
+Per `balance_kitchen_schema.md` (Packs section):
 
-### 2.1 `packs_packs`
-Catalog of purchasable pack products.
+### 2.1 `pack_products`
 
-Columns:
-- `id` (uuid, pk)
-- `name` (text)
-- `description` (text, nullable)
-- `meals_included` (integer)
-- `price_cents` (integer)
-- `currency` (text, default `AUD`)
-- `status` (text) — `ACTIVE` | `INACTIVE`
-- `created_at`, `updated_at`
+Catalog of pack SKUs (authoritative product definition).
 
-### 2.2 `packs_purchases`
-Tracks purchase of packs by accounts.
+### 2.2 `packs`
 
-Columns:
-- `id` (uuid, pk)
-- `account_id` (uuid, fk)
-- `pack_id` (uuid, fk)
-- `transaction_id` (uuid, nullable, fk → `billing_transactions.id`)
-- `status` (text) — `PENDING` | `PAID` | `CANCELLED` | `REFUNDED`
-- `meals_granted` (integer)
-- `created_at`, `updated_at`
+Customer-owned packs (economic anchor).
 
-### 2.3 `packs_events`
-Event log for pack lifecycle.
+Locked rules:
 
-Columns:
-- `id` (uuid, pk)
-- `account_id` (uuid)
-- `purchase_id` (uuid)
-- `type` (text)
-- `payload` (jsonb, nullable)
-- `request_id` (uuid, nullable)
-- `created_at` (timestamptz)
+- `meals_remaining >= 0`
+- `locked_credits_remaining >= 0`
+- v1 invariant: `locked_credits_remaining = meals_remaining`
+
+### 2.3 `pack_events` (append-only)
+
+All pack state changes MUST emit a `pack_events` row.
+No silent adjustments.
 
 ---
 
@@ -89,6 +73,7 @@ Columns:
 ### 3.1 Client routes
 
 #### POST `/api/v1/client/packs/checkout`
+
 Initiate a Stripe Checkout session for a pack purchase.
 
 - **Auth:** required (`client` role)
@@ -97,10 +82,18 @@ Initiate a Stripe Checkout session for a pack purchase.
 - **Rate limit:** required and stable (e.g., `auth:ip:${ip}::path:${path}`)
 - **Body:** `{ pack_id, success_url, cancel_url }`
 
+**Return URL validation (Mandatory):**
+
+- `success_url` and `cancel_url` MUST be validated by allowlist (see `billing_module.md`).
+- Must resolve to the **client surface** origin only.
+- If invalid: reject with `400 VALIDATION_FAILED`.
+
 Response:
+
 - `200`: `{ checkout_url: string }` (preferred)
 
 #### GET `/api/v1/client/packs`
+
 List active pack catalogue.
 
 - **Auth:** required (client)
@@ -108,6 +101,7 @@ List active pack catalogue.
 - **CSRF:** not required (safe method)
 
 #### GET `/api/v1/client/packs/purchases`
+
 List pack purchases for the client’s account.
 
 - **Auth:** required (client)
@@ -116,15 +110,19 @@ List pack purchases for the client’s account.
 ### 3.2 Admin routes
 
 #### POST `/api/v1/admin/packs`
+
 Create a pack product.
 
 #### PATCH `/api/v1/admin/packs/:id`
+
 Update pack.
 
 #### POST `/api/v1/admin/packs/:id/activate`
+
 Set status ACTIVE.
 
 #### POST `/api/v1/admin/packs/:id/deactivate`
+
 Set status INACTIVE.
 
 Admin routes must use stricter RBAC and limits.
@@ -135,41 +133,70 @@ Admin routes must use stricter RBAC and limits.
 
 ### 4.1 `createPackCheckoutSession`
 
+Idempotency (Mandatory):
+
+- Checkout creation must accept an `idempotency_key` (opaque string).
+- If a matching in-flight checkout already exists (same account, same pack_product, same short time window),
+  return the original `checkout_url`.
+- The idempotency key MUST be validated and persisted in the Billing flow (preferred) or Packs (acceptable),
+  but must not be “in-memory only”.
+
+Locked rules:
+
+- `idempotency_key` MUST be scoped to `(account_id, surface, operation)` and stored.
+- Duplicate `idempotency_key` MUST return the original `{ checkout_url }` (no new purchase, no new session).
+- Day-bucket heuristics are forbidden (they allow duplicate charges and duplicate entitlements).
+
 Input:
+
 - `actor` (client)
 - `pack_id`
 - `success_url`, `cancel_url`
 
 Responsibilities:
+
 - Validate pack exists and is `ACTIVE`
 - Create a `packs_purchases` record with `status=PENDING` and `meals_granted=pack.meals_included`
 - Call Billing/Stripe to create a Checkout Session (one-off)
 - Persist Stripe references on the **billing transaction** (not packs) when available
 - Return `checkout_url`
 
-### 4.2 `recordPackPurchasePaidFromWebhook`
+Ordering of operations (Mandatory):
 
-Triggered by Billing webhook handling.
+1) Create `packs_purchases` (status=PENDING) first.
+2) Create Stripe Checkout Session using a Billing idempotency key derived from `purchase_id`.
+3) Persist provider references (checkout_session_id / payment_intent_id) against Billing transaction records.
+4) Return checkout URL.
 
-Input:
-- `account_id`
-- `purchase_id`
-- `transaction_id`
+Rule:
 
-Responsibilities:
-- Set `packs_purchases.status=PAID`
-- Emit `packs_events` entry (`PACK_PURCHASE_PAID`)
-- Grant meals into Credits ledger (if Credits module is live), referencing purchase/transaction
+- Packs MUST never create a Checkout Session without a persisted `purchase_id`.
 
-### 4.3 `recordPackRefundedFromWebhook`
+### 4.2 `recordPackPurchasedFromWebhook`
 
-Input:
-- `purchase_id` / `transaction_id`
+Triggered by Billing (after signature + idempotency claim).
 
 Responsibilities:
-- Set `packs_purchases.status=REFUNDED`
-- Emit `packs_events` entry (`PACK_PURCHASE_REFUNDED`)
-- Reverse entitlement via Credits ledger (if Credits module is live)
+
+- Create a new `packs` row for the account:
+  - `status=ACTIVE`
+  - `meals_remaining = pack_products.meals_total`
+  - `locked_credits_remaining = meals_remaining` (v1 invariant)
+  - `purchased_at = occurred_at` (from billing transaction)
+- Emit `pack_events`:
+  - `PACK_PURCHASED` with positive deltas
+
+### 4.3 `consumePackForOrderConfirmation`
+
+Triggered by Ordering confirm (not webhooks).
+
+Responsibilities:
+
+- Decrement `packs.meals_remaining` (and locked credits) atomically
+- Emit `pack_events`:
+  - `PACK_CONSUMED` (delta negative)
+  - `PACK_EXHAUSTED` when it hits zero
+- Must be idempotent and concurrency-safe (see Ordering authority boundaries)
 
 ---
 
@@ -191,10 +218,12 @@ Packs should use **Stripe Checkout (one-time payment)**. The Checkout Session sh
 ### 5.2 Webhook reconciliation
 
 Stripe webhook event types to handle for packs:
+
 - `checkout.session.completed` (payment success)
 - `charge.refunded` (refund)
 
 Webhook route must:
+
 - Read raw body (`req.text()`)
 - Verify signature with `STRIPE_WEBHOOK_SECRET_BILLING`
 - Deduplicate by `event.id` in `billing_stripe_events`
@@ -208,17 +237,20 @@ Packs module handlers are called from Billing’s webhook use-case after a trans
 ### 6.1 BalanceGuard requirements
 
 For all HTTP routes:
+
 - BalanceGuard wrapper is mandatory
 - No PII in logs
 - Rate limits mandatory
 
 For client checkout:
+
 - `auth.required=true`
 - `auth.roles=["client"]`
 - `origin.required=true`
 - `csrf.required=true`
 
 For webhooks:
+
 - `auth.required=false`
 - `origin.required=false`
 - `csrf.required=false`
@@ -268,4 +300,3 @@ Minimum coverage:
 - Should Credits be the canonical entitlement store immediately, or should Packs directly expose remaining meals?
 - Do we treat `price_cents` as authoritative, or Stripe Price as authoritative?
 - Do we support promo codes / coupons for packs in v1?
-

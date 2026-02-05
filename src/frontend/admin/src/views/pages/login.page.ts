@@ -5,38 +5,25 @@
 // Non-negotiables:
 // - NEVER call the browser network API directly.
 // - ALWAYS use the canonical frontend HTTP client.
-// - Treat HttpClientError as the expected failure path.
-// - Never leak server internals to the user.
+// - Server is the source of truth for cookies (session + CSRF).
+// - This page must NOT write cookies via document.cookie.
+//   (Doing so causes duplicate cookies and breaks invariants.)
 
 import { mustClass } from "../../../../shared/css-modules.js";
 import { el, clear } from "../../shared/dom.js";
 import styles from "./login.module.css";
 
-import {
-  httpPost,
-  expectOk,
-  HttpClientError,
-} from "../../../../lib/http-client.js";
+import { httpPost, expectOk, HttpClientError } from "../../../../lib/http-client.js";
 
-/**
- * Server contract (current minimal shape):
- * - /api/admin/auth/login returns the canonical envelope.
- * - Success data may be empty; we don't depend on it yet.
- *
- * We still type it explicitly so the call sites stay stable when
- * we later add actor/context payloads.
- */
-type AdminLoginResponse = Readonly<Record<string, never>>;
+type AdminLoginResponse = Readonly<{
+  actor: Readonly<{ kind: "admin"; role: "admin"; user_id: string }>;
+  csrf_token?: string;
+  csrf_cookie?: string;
+}>;
 
-/**
- * Perform login.
- *
- * Important:
- * - We use expectOk() so the rest of the UI can treat failures uniformly
- *   (HttpClientError with {code, message, request_id?}).
- */
-async function login(email: string, password: string): Promise<void> {
-  expectOk(
+
+async function login(email: string, password: string): Promise<AdminLoginResponse> {
+  return expectOk(
     await httpPost<AdminLoginResponse>("/api/admin/auth/login", {
       email,
       password,
@@ -44,34 +31,38 @@ async function login(email: string, password: string): Promise<void> {
   );
 }
 
-/**
- * Convert HttpClientError into calm, user-safe copy.
- * We avoid technical phrasing and never show raw server error codes.
- */
 function friendlyLoginError(err: HttpClientError): string {
-  // Keep these mappings intentionally conservative.
-  // We can expand/adjust once server-side codes are finalized.
   switch (err.code) {
     case "NETWORK_ERROR":
       return "Unable to reach the server. Please try again.";
     case "INVALID_RESPONSE":
       return "Unexpected server response. Please try again.";
+    case "AUTH_INVALID":
     case "UNAUTHENTICATED":
       return "Incorrect email or password.";
     case "WRONG_SURFACE":
       return "This session belongs to a different app surface. Please sign in again.";
+    case "CSRF_REQUIRED":
+    case "CSRF_INVALID":
+      // Login should not require CSRF, but keep this message stable if wiring changes.
+      return "Security check failed. Please refresh and try again.";
     default:
-      // Fall back to the server-provided message (it should be safe by contract),
-      // but keep it calm and not overly technical.
       return err.message || "Sign in failed. Please try again.";
   }
 }
 
-export function renderAdminLoginPage(root: HTMLElement): void {
+export type AdminLoginPageOpts = Readonly<{
+  // Allow async so app gate can run a /me probe if it wants.
+  onLoggedIn: () => void | Promise<void>;
+}>;
+
+export function renderAdminLoginPage(root: HTMLElement, opts: AdminLoginPageOpts): void {
+  root.replaceChildren();
+
   const status = el("div", {
     class: mustClass(styles, "status"),
     "aria-live": "polite",
-  });
+  }) as HTMLDivElement;
 
   const email = el("input", {
     class: mustClass(styles, "input"),
@@ -89,11 +80,7 @@ export function renderAdminLoginPage(root: HTMLElement): void {
     placeholder: "Password",
   }) as HTMLInputElement;
 
-  const btn = el(
-    "button",
-    { class: mustClass(styles, "button"), type: "submit" },
-    "Sign in"
-  ) as HTMLButtonElement;
+  const btn = el("button", { class: mustClass(styles, "button"), type: "submit" }, "Sign in") as HTMLButtonElement;
 
   const form = el("form", { class: mustClass(styles, "form") }) as HTMLFormElement;
 
@@ -106,34 +93,46 @@ export function renderAdminLoginPage(root: HTMLElement): void {
     btn
   );
 
-  // Keep handler sync; launch async explicitly.
+  const setStatus = (msg: string): void => {
+    clear(status);
+    status.textContent = msg;
+  };
+
+  const setDisabled = (disabled: boolean): void => {
+    btn.disabled = disabled;
+    email.disabled = disabled;
+    password.disabled = disabled;
+  };
+
   form.addEventListener("submit", (e) => {
     e.preventDefault();
-    clear(status);
-    status.textContent = "";
-    btn.disabled = true;
+
+    const emailValue = email.value.trim();
+    const passValue = password.value;
+
+    setStatus("");
+    setDisabled(true);
+    setStatus("Signing in…");
 
     void (async () => {
       try {
-        await login(email.value.trim(), password.value);
+        // ✅ Server sets session + CSRF cookies via Set-Cookie.
+        // Do NOT write cookies client-side (prevents duplicates & drift).
+        await login(emailValue, passValue);
 
-        // On success we navigate to the Admin dashboard.
-        // We use assign() so the browser location matches the surface route
-        // and the boot logic can re-check /auth/me as needed.
-        window.location.assign("/admin/dashboard");
+        // ✅ Let the app gate/router flip auth state + navigate.
+        await opts.onLoggedIn();
       } catch (err: unknown) {
         if (err instanceof HttpClientError) {
-          status.textContent = friendlyLoginError(err);
+          setStatus(friendlyLoginError(err));
           return;
         }
 
-        // Programmer bug: surface it in console, show generic error to user.
         // eslint-disable-next-line no-console
         console.error("[admin-login] unexpected error", err);
-
-        status.textContent = "Sign in failed. Please try again.";
+        setStatus("Sign in failed. Please try again.");
       } finally {
-        btn.disabled = false;
+        setDisabled(false);
       }
     })();
   });
