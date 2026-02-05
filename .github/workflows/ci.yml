@@ -12,26 +12,38 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9
-
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: pnpm
 
-      - name: Install
-        run: pnpm install --frozen-lockfile
+      - name: Enable Corepack (pnpm from packageManager)
+        run: corepack enable
 
-      # Create .env.test for dotenv-cli used by pnpm test:ci
-      - name: Create .env.test
+      - name: Install pnpm (pinned)
+        run: corepack prepare pnpm@10.0.0 --activate
+
+      - name: Assert pnpm version matches packageManager
         shell: bash
         run: |
-          cat > .env.test <<'EOF'
-          NODE_ENV=test
-          DATABASE_URL=${{ secrets.DATABASE_URL_TEST }}
-          EOF
+          node -e "const pm=require('./package.json').packageManager||''; if(!pm.startsWith('pnpm@')){console.error('packageManager must be pnpm@x.y.z'); process.exit(1);} console.log('packageManager:', pm)"
+          EXPECTED=$(node -p "require('./package.json').packageManager.replace('pnpm@','')")
+          ACTUAL=$(pnpm -v)
+          echo "expected pnpm=$EXPECTED, actual pnpm=$ACTUAL"
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "pnpm version mismatch"
+            exit 1
+          fi
+
+      - name: Toolchain guard (no npm/yarn installs)
+        shell: bash
+        run: |
+          if [ -f package-lock.json ]; then echo "Do not use npm (package-lock.json found)"; exit 1; fi
+          if [ -f yarn.lock ]; then echo "Do not use yarn (yarn.lock found)"; exit 1; fi
+          if [ ! -f pnpm-lock.yaml ]; then echo "pnpm-lock.yaml missing"; exit 1; fi
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
 
       - name: Enforce no raw fetch in UI
         run: node scripts/no-raw-fetch.mjs
@@ -42,7 +54,6 @@ jobs:
       - name: Lint
         run: pnpm lint
 
-      # Run the same CI test command locally uses (your pnpm test currently maps to test:ci)
       - name: Test
         run: pnpm test
 
