@@ -5,7 +5,7 @@
 // Contract:
 // - POST /api/client/auth/login
 // - Accepts JSON body: { email, password }
-// - Sets client session cookie (HttpOnly)
+// - Sets client session cookie (HttpOnly) — scoped per sessionCookieConfig(surface).path
 // - Sets CSRF cookie (NOT HttpOnly): per-surface only
 // - Returns canonical ok envelope with actor (+ optional csrf metadata)
 
@@ -19,6 +19,7 @@ import { loginUseCase } from "../../../../modules/identity/application/login.use
 import { getIdentityRepository } from "../../../../modules/identity/infrastructure/sessions-store.js";
 
 import { sessionCookieConfig } from "../../../../shared/security/balanceguard/session-cookie-config.js";
+import { setSessionCookie } from "../../../../shared/security/balanceguard/session-cookie.js";
 import { setCsrfCookie, csrfCookieName } from "../../../../shared/security/balanceguard/csrf.js";
 
 import { extractIp } from "../../../../shared/security/balanceguard/ip.js";
@@ -47,20 +48,8 @@ const validateLoginBody: Validator<LoginBody> = (input: unknown) => {
   return { email: trimmed, password };
 };
 
-function makeSessionCookie(name: string, value: string, secure: boolean, sameSite: "lax" | "none"): string {
-  const parts = [
-    `${name}=${encodeURIComponent(value)}`,
-    "Path=/",
-    "HttpOnly",
-    `SameSite=${sameSite === "none" ? "None" : "Lax"}`,
-  ];
-  if (secure) parts.push("Secure");
-  return parts.join("; ");
-}
-
 type ClientLoginResponse = Readonly<{
   actor: Readonly<{ kind: "client"; role: "client"; user_id: string }>;
-  // Optional metadata (debug/clients)
   csrf_token: string;
   csrf_cookie: string;
 }>;
@@ -115,8 +104,8 @@ export const clientAuthLogin = balanceguardClient(
 
     const headers = new Headers(base.headers);
 
-    // Session cookie (HttpOnly)
-    headers.append("set-cookie", makeSessionCookie(cfg.name, out.sessionId, cfg.secure, cfg.sameSite));
+    // ✅ Session cookie (HttpOnly) — respects per-surface Path from sessionCookieConfig
+    setSessionCookie(headers, "client", out.sessionId);
 
     // CSRF cookie (NOT HttpOnly) — per-surface only (no legacy)
     setCsrfCookie(headers, "client", csrfToken, { secure: cfg.secure, sameSite: cfg.sameSite });

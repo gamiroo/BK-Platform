@@ -8,10 +8,13 @@ on:
 jobs:
   ci:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
       - uses: pnpm/action-setup@v4
+        with:
+          version: 9
 
       - uses: actions/setup-node@v4
         with:
@@ -20,6 +23,15 @@ jobs:
 
       - name: Install
         run: pnpm install --frozen-lockfile
+
+      # Create .env.test for dotenv-cli used by pnpm test:ci
+      - name: Create .env.test
+        shell: bash
+        run: |
+          cat > .env.test <<'EOF'
+          NODE_ENV=test
+          DATABASE_URL=${{ secrets.DATABASE_URL_TEST }}
+          EOF
 
       - name: Enforce no raw fetch in UI
         run: node scripts/no-raw-fetch.mjs
@@ -30,6 +42,7 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      # Run the same CI test command locally uses (your pnpm test currently maps to test:ci)
       - name: Test
         run: pnpm test
 
