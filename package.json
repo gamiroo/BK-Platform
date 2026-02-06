@@ -11,7 +11,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
     "test": "pnpm test:ci",
-    "test:ci": "dotenv -e .env.test -- node scripts/run-tests.mjs",
+    "test:ci": "node scripts/run-tests.mjs",
+    "test:with-env:test": "pnpm exec dotenv -e .env.test -- pnpm test:ci",
+    
     "build": "pnpm build:server && pnpm build:site && pnpm build:client && pnpm build:admin",
     "build:server": "tsc -p tsconfig.server.json && tsc-alias -p tsconfig.server.json",
     
@@ -24,6 +26,7 @@
     "db:bootstrap:dev": "dotenv -e .env.local -- node --import tsx scripts/db-bootstrap-env-marker.ts",
     "db:migrate:dev": "pnpm db:bootstrap:dev && pnpm db:safety:dev && dotenv -e .env.local -- drizzle-kit migrate --config drizzle.config.ts",
     "db:migrate:prod": "node scripts/confirm-prod-migrate.mjs && drizzle-kit migrate --config drizzle.config.ts",
+    "db:migrate:test": "drizzle-kit migrate --config drizzle.config.ts",
     "db:studio": "drizzle-kit studio",
     "db:ping": "node --import tsx scripts/db-ping.ts",
     "db:seed:dev": "dotenv -e .env.local -- node --import tsx scripts/db-seed-identity.ts",
