@@ -12,3 +12,10 @@ coverage
 *.log
 pnpm-debug.log*
 .gitleaks.toml
+# Local auth artifacts
+cookies.txt
+*.cookies
+*.cookie
+*.cookiejar
+cookiejar.txt
+

@@ -10,16 +10,21 @@ async function readJson<T>(res: Response): Promise<T> {
 }
 
 
-function withEnv<T>(vars: Record<string, string | undefined>, fn: () => T): T {
+async function withEnv<T>(
+  vars: Record<string, string | undefined>,
+  fn: () => Promise<T>
+): Promise<T> {
   const prev: Record<string, string | undefined> = {};
+
   for (const k of Object.keys(vars)) {
     prev[k] = process.env[k];
     const v = vars[k];
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;
   }
+
   try {
-    return fn();
+    return await fn();
   } finally {
     for (const k of Object.keys(vars)) {
       const v = prev[k];
@@ -28,6 +33,7 @@ function withEnv<T>(vars: Record<string, string | undefined>, fn: () => T): T {
     }
   }
 }
+
 
 test("balanceguard: passes through handler response on success", async () => {
   const ctx = createRequestContext();

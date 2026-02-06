@@ -8,7 +8,18 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
+    host: true, // listen on all interfaces so client.localtest.me works
     port: 5174,
     strictPort: true,
+
+    // ✅ allow localtest.me + subdomains (Vite host allowlist)
+    allowedHosts: [".localtest.me", "localtest.me"],
+
+    proxy: {
+      "/api": {
+        target: "http://localhost:3000",
+        changeOrigin: true,
+      },
+    },
   },
 });

@@ -8,8 +8,13 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
+    host: true,
     port: 5175,
     strictPort: true,
+
+    // ✅ allow localtest.me + subdomains
+    allowedHosts: [".localtest.me", "localtest.me"],
+
     proxy: {
       "/api": {
         target: "http://localhost:3000",

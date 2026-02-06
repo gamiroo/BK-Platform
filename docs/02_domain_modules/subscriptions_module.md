@@ -13,6 +13,14 @@ Referenced by balance.md
 > - `balanceguard.md` (route security contract)
 > - `balance_kitchen_toolkit.md` (shared placement rules)
 
+## Canonical module structure (Mandatory)
+
+This module’s folder + file layout is specified in:
+
+- `subscriptions_module_structure.md`
+
+**Rule (locked):** If the on-disk structure under `src/modules/subscriptions/**` changes (file added/removed/moved), the same PR MUST update `subscriptions_module_structure.md` to match. Any PR that changes structure without updating the structure doc is invalid by definition.
+
 ---
 
 ## 0. At a Glance
@@ -49,63 +57,30 @@ Referenced by balance.md
 
 Per `balance_kitchen_schema.md`:
 
-### 2.1 `subscriptions_plans`
+### 2.1 `subscription_plans`
 
-Catalog of subscription plans.
+- `key` (unique), `title`, `status (ACTIVE|RETIRED)`
+- Stripe provider ids are intentionally not present yet in schema v1.0:
+  - if Stripe Prices are required in v1 build, add `provider_plan_id` explicitly to schema and document.
 
-Columns (typical; align to schema):
+### 2.2 `subscriptions`
 
-- `id` (uuid, pk)
-- `name` (text)
-- `description` (text, nullable)
-- `interval` (text) — e.g. `WEEK` | `FORTNIGHT` | `MONTH`
-- `meals_per_interval` (integer)
-- `provider_plan_id` (text) — Stripe `price_...` (**authoritative** pointer)
-- ⚠️ We do **not** store `price_cents` in BK v1; Stripe Prices are authoritative.
-- `currency` (text, default `AUD`)
-- `provider` (text, default `stripe`)
-- `provider_plan_id` (text) — Stripe `price_...` (authoritative pointer)
-- `status` (text) — `ACTIVE` | `INACTIVE`
-- `created_at`, `updated_at`
+Customer subscriptions tied to `account_id` and `plan_id`.
 
-Notes:
+Locked rule:
 
-- Stripe Prices are authoritative for money amounts; BK can store amounts elsewhere later if needed,
-  but v1 uses `provider_plan_id` as the billing pointer.
+- Subscription active state is constrained by pack balance policy in Ordering, but the subscription lifecycle remains owned here.
 
-### 2.2 `subscriptions_subscriptions`
+### 2.3 `subscription_entitlements`
 
-Customer subscriptions.
+Monthly capability counters:
 
-Columns (typical; align to schema):
+- preset_access / override_access / allowance / used
+- promo_unlocked_credits_grant
 
-- `id` (uuid, pk)
-- `account_id` (uuid, fk)
-- `plan_id` (uuid, fk)
-- `provider` (text)
-- `provider_subscription_id` (text) — Stripe `sub_...`
-- `status` (text) — `INCOMPLETE` | `ACTIVE` | `PAST_DUE` | `CANCELLED` | `PAUSED`
-- `current_period_start` (timestamptz)
-- `current_period_end` (timestamptz)
-- `cancel_at_period_end` (boolean)
-- `canceled_at` (timestamptz, nullable)
-- `paused_at` (timestamptz, nullable)
-- `resume_at` (timestamptz, nullable)
-- `created_at`, `updated_at`
+Uniqueness:
 
-### 2.3 `subscriptions_events`
-
-Audit log for subscription lifecycle.
-
-Columns:
-
-- `id` (uuid, pk)
-- `account_id` (uuid)
-- `subscription_id` (uuid)
-- `type` (text)
-- `payload` (jsonb, nullable)
-- `request_id` (uuid, nullable)
-- `created_at` (timestamptz)
+- unique `(subscription_id, period_start)`
 
 ---
 
@@ -230,6 +205,12 @@ Transitions:
 - `cancel_url: url` (Zod v4: `z.url()`)
 - Payload size is limited (8KB)
 
+Additional validation (Mandatory):
+
+- `success_url` and `cancel_url` MUST pass Billing's allowlist validation
+  (z.url() is not sufficient).
+- URLs must target the client surface origin only.
+
 **Security posture:**
 
 - `auth.required = true`
@@ -345,6 +326,11 @@ Input:
 - `plan_id`
 - `success_url`, `cancel_url`
 
+Return URL validation (Mandatory):
+
+- `success_url` and `cancel_url` MUST be allowlisted to the **client surface** origin only.
+- See `billing_module.md` Return URL hardening.
+
 Responsibilities:
 
 - Validate plan exists and is `ACTIVE`
@@ -397,6 +383,15 @@ Responsibilities:
 
 > Stripe events are verified + idempotency-claimed in Billing.
 > Subscriptions exposes provider-neutral use-cases that apply state updates and emit `subscriptions_events`.
+
+Entitlement grant idempotency (Mandatory):
+
+- Any subscription-driven entitlement (e.g. monthly override allowance, promo credits)
+  MUST be granted at most once per billing period.
+- Store a deterministic `entitlement_grant_key`:
+  `(subscription_id, period_start, period_end, entitlement_type)`
+  and enforce uniqueness.
+- On refunds/voids, reversals must reference the original grant key.
 
 ---
 
@@ -460,6 +455,15 @@ Responsibilities:
 - Update `current_period_start/end` when provided (best-effort)
 - Emit `subscriptions_events` (`SUBSCRIPTION_INVOICE_PAID`)
 
+Period boundary rule (Mandatory):
+
+- If `current_period_start/end` are missing from the provider payload:
+  - Subscriptions MUST still record the invoice-paid event,
+  - but entitlement grants that require period boundaries MUST:
+    - either derive period boundaries from stored subscription state, or
+    - fail closed and record a `subscriptions_events` entry indicating `period_unknown`.
+- Never “guess” dates in a way that could double-grant entitlements.
+
 #### 5.4.3 `recordInvoicePaymentFailedUseCase`
 
 Triggered by:
@@ -504,6 +508,29 @@ Rationale:
 ---
 
 ## 6. Stripe + Billing Integration
+
+Schema alignment note:
+
+- `balance_kitchen_schema.md` v1.0 does not yet include provider identifiers on `subscriptions` / `subscription_plans`.
+- For Stripe integration to be deterministic, we SHOULD add:
+  - `subscriptions.provider_subscription_id text null unique`
+  - `subscriptions.provider_customer_id text null`
+  - `subscription_plans.provider_plan_id text not null unique` (Stripe `price_...`)
+- If you prefer to defer schema changes, Billing must rely on `billing_customers` + metadata-only correlation,
+  which is workable but more fragile operationally.
+
+### Schema alignment (Mandatory for v1 build)
+
+To implement Stripe reconciliation safely, v1 MUST include in schema:
+
+- `subscription_plans.provider_plan_id` (Stripe `price_...`, unique)
+- `subscriptions.provider_subscription_id` (Stripe `sub_...`, unique, nullable)
+- `subscriptions.provider_customer_id` (Stripe `cus_...`, nullable)
+- `subscriptions.status` supports: `INCOMPLETE`, `ACTIVE`, `PAST_DUE`, `PAUSED`, `CANCELLED`
+- `subscriptions.current_period_start/end` nullable for `INCOMPLETE`
+- Optional but recommended:
+  - `subscriptions.cancel_at_period_end boolean`
+  - `subscriptions.resume_at timestamptz`
 
 ### 6.1 Checkout creation
 
@@ -559,6 +586,14 @@ Required metadata keys on Stripe objects (Checkout Session and/or Subscription/I
 
 If these keys are missing, the handler must **skip** (no state write) to avoid misapplying events.
 (Fallback correlation by `provider_subscription_id` can be added later.)
+
+Fallback correlation (Explicitly disabled in v1):
+
+- v1 MUST NOT apply events by searching via `provider_subscription_id` alone.
+- Reason: provider ids are not a sufficient ownership proof without BK metadata binding.
+- Enabling fallback requires:
+  - an explicit spec revision
+  - tests covering cross-account negative cases
 
 ---
 

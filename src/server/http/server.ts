@@ -19,6 +19,8 @@ import { Router } from "./router.js";
 import { registerSiteRoutes } from "./routes/site.routes.js";
 import { registerClientRoutes } from "./routes/client.routes.js";
 import { registerAdminRoutes } from "./routes/admin.routes.js";
+import { registerWebhookRoutes } from "./routes/webhooks.routes.js";
+
 
 async function readBody(req: http.IncomingMessage): Promise<Buffer | undefined> {
   // For GET/HEAD, no body
@@ -33,9 +35,13 @@ async function readBody(req: http.IncomingMessage): Promise<Buffer | undefined> 
   });
 }
 
-type Surface = "site" | "client" | "admin";
+type Surface = "site" | "client" | "admin" | "webhooks";
 
 function routeSurface(pathname: string): Readonly<{ surface: Surface; strippedPathname: string }> {
+  // Webhooks: do NOT use surface routers (no Origin/CSRF/auth).
+  if (pathname === "/webhooks" || pathname.startsWith("/webhooks/")) {
+    return { surface: "webhooks", strippedPathname: pathname };
+  }
   // Mirror the Vercel catch-all behavior:
   // /api/<surface>/<anything> -> /<anything>
   // /api/<surface> -> /
@@ -89,10 +95,28 @@ async function toFetchRequest(req: http.IncomingMessage, overriddenPathname: str
 
 /**
  * Write a Fetch Response back to node:http response.
+ *
+ * IMPORTANT:
+ * - `Set-Cookie` must preserve multiple header values.
+ *   If we naïvely setHeader("set-cookie", value) in a loop, later cookies overwrite earlier ones.
  */
 async function writeNodeResponse(res: http.ServerResponse, out: Response): Promise<void> {
   res.statusCode = out.status;
-  out.headers.forEach((value, key) => res.setHeader(key, value));
+
+  // ✅ Special-case Set-Cookie (can be multiple)
+  // Node's undici Headers exposes getSetCookie()
+  const anyHeaders = out.headers as unknown as { getSetCookie?: () => string[] };
+  const setCookies = anyHeaders.getSetCookie ? anyHeaders.getSetCookie() : [];
+
+  // Write all headers except set-cookie
+  out.headers.forEach((value, key) => {
+    if (key.toLowerCase() === "set-cookie") return;
+    res.setHeader(key, value);
+  });
+
+  if (setCookies.length > 0) {
+    res.setHeader("set-cookie", setCookies);
+  }
 
   if (!out.body) {
     res.end();
@@ -103,15 +127,18 @@ async function writeNodeResponse(res: http.ServerResponse, out: Response): Promi
   res.end(Buffer.from(ab));
 }
 
+
 export function startHttpServer(port: number): http.Server {
   // Surface routers (avoid collisions in the single Router map)
   const siteRouter = new Router();
   const clientRouter = new Router();
   const adminRouter = new Router();
+  const webhookRouter = new Router();
 
   registerSiteRoutes(siteRouter);
   registerClientRoutes(clientRouter);
   registerAdminRoutes(adminRouter);
+  registerWebhookRoutes(webhookRouter);
 
   const server = http.createServer((req, res) => {
     const ctx = createRequestContext();
@@ -138,11 +165,13 @@ export function startHttpServer(port: number): http.Server {
           );
 
           const router =
-            routed.surface === "admin"
-              ? adminRouter
-              : routed.surface === "client"
-                ? clientRouter
-                : siteRouter;
+            routed.surface === "webhooks"
+              ? webhookRouter
+              : routed.surface === "admin"
+                ? adminRouter
+                : routed.surface === "client"
+                  ? clientRouter
+                  : siteRouter;
 
           const fetchRes = await router.handle(ctx, fetchReq);
 

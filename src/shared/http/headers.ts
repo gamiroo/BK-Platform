@@ -2,10 +2,11 @@
 // Security headers applied to all responses.
 // Keep this centralized so BalanceGuard can enforce it consistently.
 
-export function applySecurityHeaders(res: Response): Response {
-  const headers = new Headers(res.headers);
+import { cloneHeadersPreserveSetCookie } from "./clone-headers.js";
 
-  // Baseline hardening
+export function applySecurityHeaders(res: Response): Response {
+  const headers = cloneHeadersPreserveSetCookie(res.headers);
+
   headers.set("x-content-type-options", "nosniff");
   headers.set("x-frame-options", "DENY");
   headers.set("referrer-policy", "no-referrer");
@@ -13,7 +14,6 @@ export function applySecurityHeaders(res: Response): Response {
   headers.set("cross-origin-opener-policy", "same-origin");
   headers.set("cross-origin-resource-policy", "same-origin");
 
-  // HSTS only makes sense behind HTTPS (production)
   if (process.env.NODE_ENV === "production") {
     headers.set("strict-transport-security", "max-age=31536000; includeSubDomains");
   }

@@ -1,16 +1,23 @@
 // src/server/http/routes/site.routes.ts
-// Site surface routes.
-// This file defines real endpoints, so handlers MUST be BalanceGuard-wrapped.
+// Site surface routes (public-facing + infra).
+//
+// Rules:
+// - This file defines real endpoints, so handlers MUST be BalanceGuard-wrapped.
+// - Site surface is mostly public: auth usually off.
+// - Origin enforcement is route-specific (fail-closed in prod if allowlist missing).
 
 import type { Router } from "../router.js";
 import type { RequestContext } from "../../../shared/logging/request-context.js";
+
 import { balanceguardSite } from "../../../shared/security/balanceguard/wrappers.js";
+import { applyCorsHeaders } from "../../../shared/http/cors.js";
 import { json } from "../../../shared/http/responses.js";
+
 import { AppError } from "../../../shared/errors/app-error.js";
 import { normalizeError } from "../../../shared/errors/normalize-error.js";
 import { toHttpErrorResponse } from "../../../shared/errors/http-error-response.js";
+
 import { createDb } from "../../../shared/db/client.js";
-import { applyCorsHeaders } from "../../../shared/http/cors.js";
 import {
   readDbEnvMarker,
   expectedMarkerFromRuntime,
@@ -20,6 +27,13 @@ import {
 
 import { submitEnquiry, validateEnquiryInput } from "../../../modules/enquiry/application/submit-enquiry.js";
 
+// ✅ Webhooks are "site routes" (non-/api) by design.
+import { registerWebhookRoutes } from "./webhooks.routes.js";
+
+/**
+ * Standard 405 response in your canonical envelope.
+ * Keep this helper so we don't hand-roll envelopes in random routes.
+ */
 function methodNotAllowed(ctx: RequestContext): Response {
   return toHttpErrorResponse(
     ctx,
@@ -34,6 +48,21 @@ function methodNotAllowed(ctx: RequestContext): Response {
 }
 
 export function registerSiteRoutes(router: Router): void {
+  /**
+   * Register webhook endpoints first (explicit grouping).
+   *
+   * Webhooks should generally:
+   * - NOT require Origin/CSRF/auth
+   * - be rate-limited separately if needed
+   */
+  registerWebhookRoutes(router);
+
+  /**
+   * Health check:
+   * - Confirms server is alive
+   * - Confirms DB reachable
+   * - Confirms DB env marker matches runtime (BalanceGuard safety invariant)
+   */
   router.get(
     "/health",
     balanceguardSite(async (ctx: RequestContext) => {
@@ -50,15 +79,19 @@ export function registerSiteRoutes(router: Router): void {
     })
   );
 
-  // Public site API endpoints live under /api/site/*
+  /**
+   * Public enquiry endpoint
+   *
+   * Notes:
+   * - No auth (public marketing form)
+   * - No CSRF (no session)
+   * - Origin enforced (unsafe POST) — in prod must have allowlist configured
+   * - Low rate limit to reduce spam
+   */
   router.post(
     "/api/site/enquiry",
     balanceguardSite(
       {
-        // Public enquiry endpoint:
-        // - No auth
-        // - CSRF not applicable (no session required)
-        // - Origin relaxed for local dev + marketing forms
         requireOrigin: true,
         requireCsrf: false,
         requireAuth: false,
@@ -69,25 +102,28 @@ export function registerSiteRoutes(router: Router): void {
         const input = validateEnquiryInput(raw);
         const out = await submitEnquiry(input);
 
+        // Keep explicit CORS application (even though server.ts also applies security headers)
+        // because these are fetch endpoints used by browsers.
         const res = json(ctx, { lead_id: out.leadId });
         return applyCorsHeaders("site", req, res);
       }
     )
   );
 
-  // Optional: explicit 405 if someone hits GET /api/site/enquiry
+  /**
+   * If someone hits GET for a POST-only endpoint, return a canonical 405 envelope.
+   */
   router.get(
     "/api/site/enquiry",
-    balanceguardSite(async (ctx: RequestContext) => {
-      return methodNotAllowed(ctx);
-    })
+    balanceguardSite(async (ctx: RequestContext) => methodNotAllowed(ctx))
   );
 
-  // Simple surface ping (optional)
+  /**
+   * Root ping:
+   * Useful for quick sanity during early dev.
+   */
   router.get(
     "/",
-    balanceguardSite(async (ctx: RequestContext) => {
-      return json(ctx, { surface: "site", status: "ok" });
-    })
+    balanceguardSite(async (ctx: RequestContext) => json(ctx, { surface: "site", status: "ok" }))
   );
 }

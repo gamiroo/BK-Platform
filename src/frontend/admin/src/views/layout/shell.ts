@@ -1,9 +1,10 @@
 import { mustClass } from "../../../../../frontend/shared/css-modules.js";
 import {
   getThemePreference,
+  initTheme,
   nextThemePreference,
   setThemePreference,
-} from "../../../../../frontend/shared/theme.js";
+} from "../../../../shared/theme.js";
 import { el } from "../../shared/dom.js";
 import styles from "./shell.module.css";
 
@@ -22,24 +23,24 @@ function themeLabel(pref: ThemePref): string {
   return "Light theme";
 }
 
-function createThemeToggle(extraClassName: string): HTMLButtonElement {
+function createThemeToggle(extraClass: string): HTMLButtonElement {
   const btn = el("button", {
     type: "button",
-    class: `${mustClass(styles, "themeToggle")} ${extraClassName}`.trim(),
+    class: `${mustClass(styles, "themeToggle")} ${extraClass}`.trim(),
     "aria-label": "Theme",
+    title: "Theme",
   }) as HTMLButtonElement;
 
   const refresh = (): void => {
     const pref = getThemePreference();
     btn.textContent = themeIcon(pref);
     btn.setAttribute("data-theme-pref", pref);
-    btn.title = themeLabel(pref);
     btn.setAttribute("aria-label", themeLabel(pref));
+    btn.title = themeLabel(pref);
   };
 
   btn.addEventListener("click", () => {
-    const next = nextThemePreference(getThemePreference());
-    setThemePreference(next);
+    setThemePreference(nextThemePreference(getThemePreference()));
     window.dispatchEvent(new Event(THEME_CHANGED_EVENT));
   });
 
@@ -48,7 +49,12 @@ function createThemeToggle(extraClassName: string): HTMLButtonElement {
   return btn;
 }
 
-function createMobileMenu(opts: Readonly<{ themeToggle: HTMLButtonElement }>) {
+type MobileMenu = Readonly<{
+  burger: HTMLButtonElement;
+  overlay: HTMLDivElement;
+}>;
+
+function createMobileMenu(opts: Readonly<{ themeToggle: HTMLButtonElement; onLogout: () => void }>): MobileMenu {
   const burger = el(
     "button",
     {
@@ -70,7 +76,7 @@ function createMobileMenu(opts: Readonly<{ themeToggle: HTMLButtonElement }>) {
     class: mustClass(styles, "menuPanel"),
     role: "dialog",
     "aria-modal": "true",
-    "aria-label": "Menu",
+    "aria-label": "Admin menu",
   }) as HTMLDivElement;
 
   const closeBtn = el(
@@ -84,33 +90,42 @@ function createMobileMenu(opts: Readonly<{ themeToggle: HTMLButtonElement }>) {
     "✕"
   ) as HTMLButtonElement;
 
-  const nav = el(
-    "nav",
-    { class: mustClass(styles, "menuNav"), "aria-label": "Admin menu" },
-    el("a", { class: mustClass(styles, "menuLink"), href: "/admin/dashboard" }, "Dashboard"),
-    el("a", { class: mustClass(styles, "menuLink"), href: "/admin/clients" }, "Clients"),
-    el("a", { class: mustClass(styles, "menuLink"), href: "/admin/orders" }, "Orders"),
-    el("a", { class: mustClass(styles, "menuLink"), href: "/admin/menu" }, "Menu"),
-    el("a", { class: mustClass(styles, "menuLink"), href: "/admin/settings" }, "Settings")
-  );
-
   const menuHeader = el(
     "div",
     { class: mustClass(styles, "menuHeader") },
-    el("div", { class: mustClass(styles, "menuTitle") }, "Admin"),
+    el("div", { class: mustClass(styles, "menuTitle") }, "Menu"),
     closeBtn
   );
 
-  const menuFooter = el(
+  const logoutBtn = el(
+    "button",
+    { type: "button", class: mustClass(styles, "menuAction"), "aria-label": "Log out" },
+    "Log out"
+  ) as HTMLButtonElement;
+
+  const themeRow = el(
     "div",
-    { class: mustClass(styles, "menuFooter") },
-    el("div", { class: mustClass(styles, "menuRow") },
-      el("div", { class: mustClass(styles, "menuRowLabel") }, "Theme"),
-      opts.themeToggle
-    )
+    { class: mustClass(styles, "menuRow") },
+    el("div", { class: mustClass(styles, "menuRowLabel") }, "Theme"),
+    opts.themeToggle
   );
 
-  panel.append(menuHeader, nav, menuFooter);
+  const body = el(
+    "div",
+    { class: mustClass(styles, "menuBody") },
+    el(
+      "nav",
+      { class: mustClass(styles, "menuNav"), "aria-label": "Admin navigation" },
+      el("a", { class: mustClass(styles, "menuLink"), href: "/admin/dashboard" }, "Dashboard"),
+      el("a", { class: mustClass(styles, "menuLink"), href: "/admin/orders" }, "Orders (soon)"),
+      el("a", { class: mustClass(styles, "menuLink"), href: "/admin/customers" }, "Customers (soon)"),
+      el("a", { class: mustClass(styles, "menuLink"), href: "/admin/settings" }, "Settings (soon)")
+    ),
+    themeRow,
+    el("div", { class: mustClass(styles, "menuRow") }, logoutBtn)
+  );
+
+  panel.append(menuHeader, body);
   overlay.append(panel);
 
   let lastFocus: HTMLElement | null = null;
@@ -125,9 +140,11 @@ function createMobileMenu(opts: Readonly<{ themeToggle: HTMLButtonElement }>) {
     overlay.setAttribute("data-open", "true");
     overlay.setAttribute("aria-hidden", "false");
     burger.setAttribute("aria-expanded", "true");
-
     document.documentElement.classList.add(mustClass(styles, "noScroll"));
-    closeBtn.focus();
+
+    const firstLink = panel.querySelector("a");
+    if (firstLink instanceof HTMLAnchorElement) firstLink.focus();
+    else closeBtn.focus();
   };
 
   const close = (): void => {
@@ -136,8 +153,8 @@ function createMobileMenu(opts: Readonly<{ themeToggle: HTMLButtonElement }>) {
     overlay.removeAttribute("data-open");
     overlay.setAttribute("aria-hidden", "true");
     burger.setAttribute("aria-expanded", "false");
-
     document.documentElement.classList.remove(mustClass(styles, "noScroll"));
+
     if (lastFocus) lastFocus.focus();
     else burger.focus();
   };
@@ -154,43 +171,41 @@ function createMobileMenu(opts: Readonly<{ themeToggle: HTMLButtonElement }>) {
   });
 
   window.addEventListener("keydown", (e) => {
-    if (e.key !== "Escape") return;
-    if (isOpen()) close();
+    if (e.key === "Escape" && isOpen()) close();
+  });
+
+  logoutBtn.addEventListener("click", () => {
+    close();
+    opts.onLogout();
   });
 
   return { burger, overlay };
 }
 
-export function renderAdminShell(content: HTMLElement): HTMLElement {
+export function renderAdminShell(content: HTMLElement, opts: Readonly<{ onLogout: () => void }>): HTMLElement {
+  initTheme();
+
   const root = document.createElement("div");
   root.className = mustClass(styles, "shell");
 
-  const skip = el("a", { class: mustClass(styles, "skipLink"), href: "#main" }, "Skip to content");
+  const skip = el("a", { class: mustClass(styles, "skip"), href: "#main" }, "Skip to content");
 
-  const brand = el("a", { class: mustClass(styles, "brand"), href: "/admin/dashboard" }, "Balance Kitchen");
-  const surface = el("div", { class: mustClass(styles, "surface") }, "Admin");
-
-  const headerLeft = el("div", { class: mustClass(styles, "headerLeft") }, brand, surface);
-
-  // Header has NO theme toggle.
-  const menuTheme = createThemeToggle(mustClass(styles, "themeToggleMenu"));
-  const mobileMenu = createMobileMenu({ themeToggle: menuTheme });
-
-  const headerRight = el("div", { class: mustClass(styles, "headerRight") }, mobileMenu.burger);
-
-  const header = el("header", { class: mustClass(styles, "header") }, headerLeft, headerRight);
-
-  const sidebar = el(
-    "aside",
-    { class: mustClass(styles, "sidebar"), "aria-label": "Admin navigation" },
-    el("a", { class: mustClass(styles, "navLink"), href: "/admin/dashboard" }, "Dashboard"),
-    el("a", { class: mustClass(styles, "navLink"), href: "/admin/clients" }, "Clients"),
-    el("a", { class: mustClass(styles, "navLink"), href: "/admin/orders" }, "Orders"),
-    el("a", { class: mustClass(styles, "navLink"), href: "/admin/menu" }, "Menu"),
-    el("a", { class: mustClass(styles, "navLink"), href: "/admin/deliveries" }, "Deliveries"),
-    el("a", { class: mustClass(styles, "navLink"), href: "/admin/audit" }, "Audit log"),
-    el("a", { class: mustClass(styles, "navLink"), href: "/admin/settings" }, "Settings")
+  const brand = el(
+    "a",
+    { class: mustClass(styles, "brand"), href: "/admin/dashboard" },
+    "Balance Kitchen",
+    el("span", { class: mustClass(styles, "surfaceLabel") }, "Admin")
   );
+
+  // Desktop logout (CSS hides on mobile)
+  const logout = el("button", { class: mustClass(styles, "logout"), type: "button" }, "Log out") as HTMLButtonElement;
+  logout.addEventListener("click", () => opts.onLogout());
+
+  const menuTheme = createThemeToggle(mustClass(styles, "themeToggleMenu"));
+  const mobileMenu = createMobileMenu({ themeToggle: menuTheme, onLogout: opts.onLogout });
+
+  const headerRight = el("div", { class: mustClass(styles, "headerRight") }, mobileMenu.burger, logout);
+  const header = el("header", { class: mustClass(styles, "header") }, skip, brand, headerRight);
 
   const main = el("main", { class: mustClass(styles, "main"), id: "main" }, content);
 
@@ -203,26 +218,29 @@ export function renderAdminShell(content: HTMLElement): HTMLElement {
       "div",
       { class: mustClass(styles, "footerInner") },
       el(
-        "nav",
-        { class: mustClass(styles, "footerNav"), "aria-label": "Footer" },
-        el("a", { class: mustClass(styles, "footerLink"), href: "/admin/dashboard" }, "Dashboard"),
-        el("a", { class: mustClass(styles, "footerLink"), href: "/admin/settings" }, "Settings"),
-        el("a", { class: mustClass(styles, "footerLink"), href: "/admin/help" }, "Help")
+        "div",
+        { class: mustClass(styles, "footerLeft") },
+        el("div", { class: mustClass(styles, "footerBrand") }, "Balance Kitchen"),
+        el("div", { class: mustClass(styles, "footerMuted") }, "Admin console • Brisbane, Australia")
       ),
-      el("div", { class: mustClass(styles, "footerMeta") }, "© ", String(new Date().getFullYear()), " Balance Kitchen"),
+      el(
+        "div",
+        { class: mustClass(styles, "footerMid") },
+        el(
+          "nav",
+          { class: mustClass(styles, "footerNav"), "aria-label": "Footer" },
+          el("a", { class: mustClass(styles, "footerLink"), href: "/admin/dashboard" }, "Dashboard"),
+          el("a", { class: mustClass(styles, "footerLink"), href: "/privacy" }, "Privacy"),
+          el("a", { class: mustClass(styles, "footerLink"), href: "/terms" }, "Terms")
+        ),
+        el("div", { class: mustClass(styles, "footerCopy") }, "© ", String(new Date().getFullYear()), " Balance Kitchen")
+      ),
       el("div", { class: mustClass(styles, "footerRight") }, footerTheme)
     )
   );
 
   window.dispatchEvent(new Event(THEME_CHANGED_EVENT));
 
-  const layout = el(
-    "div",
-    { class: mustClass(styles, "layout") },
-    sidebar,
-    el("div", { class: mustClass(styles, "contentCol") }, main, footer)
-  );
-
-  root.append(skip, header, mobileMenu.overlay, layout);
+  root.append(header, mobileMenu.overlay, main, footer);
   return root;
 }

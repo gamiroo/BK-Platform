@@ -1,46 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import type http from "node:http";
 
-import { startHttpServer } from "../../../src/server/http/server.js";
-
-type JsonEnvelope =
-  | Readonly<{ ok: true; request_id: string; data: unknown }>
-  | Readonly<{ ok: false; request_id: string; error: Readonly<{ code: string; message: string; details?: unknown }> }>;
+import { withServer, readJson, loginAndGetCookie } from "./helpers/http.js";
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;
-}
-
-async function readJson(res: Response): Promise<JsonEnvelope> {
-  const text = await res.text();
-  assert.ok(text.length > 0, "expected JSON response body");
-  const parsed = JSON.parse(text) as unknown;
-  assert.ok(isRecord(parsed), "expected JSON object");
-  assert.ok(typeof parsed["ok"] === "boolean", "expected ok boolean");
-  assert.ok(typeof parsed["request_id"] === "string", "expected request_id string");
-  return parsed as JsonEnvelope;
-}
-
-async function withServer<T>(fn: (baseUrl: string) => Promise<T>): Promise<T> {
-  const server: http.Server = startHttpServer(0);
-
-  await new Promise<void>((resolve) => {
-    if (server.listening) resolve();
-    else server.once("listening", () => resolve());
-  });
-
-  const addr = server.address();
-  assert.ok(addr && typeof addr === "object", "expected server address");
-  const baseUrl = `http://127.0.0.1:${addr.port}`;
-
-  try {
-    return await fn(baseUrl);
-  } finally {
-    await new Promise<void>((resolve, reject) => {
-      server.close((err) => (err ? reject(err) : resolve()));
-    });
-  }
 }
 
 test("client /auth/me: no cookie => 401 UNAUTHENTICATED", async () => {
@@ -64,7 +28,7 @@ test("client /auth/me: wrong cookie only => 403 WRONG_SURFACE", async () => {
       method: "GET",
       headers: {
         accept: "application/json",
-        cookie: "bk_admin_session=dev_admin_cookie",
+        cookie: "bk_admin_session=some_admin_cookie",
       },
     });
 
@@ -77,13 +41,19 @@ test("client /auth/me: wrong cookie only => 403 WRONG_SURFACE", async () => {
   });
 });
 
-test("client /auth/me: correct cookie => 200 with data.actor.kind=client", async () => {
+test("client /auth/me: login => 200 with data.actor.kind=client", async () => {
   await withServer(async (baseUrl) => {
+    const cookie = await loginAndGetCookie(baseUrl, {
+      surface: "client",
+      email: "client@balance.local",
+      password: "client_password",
+    });
+
     const res = await fetch(`${baseUrl}/api/client/auth/me`, {
       method: "GET",
       headers: {
         accept: "application/json",
-        cookie: "bk_client_session=dev_client_cookie",
+        cookie,
       },
     });
 
@@ -101,11 +71,17 @@ test("client /auth/me: correct cookie => 200 with data.actor.kind=client", async
 
 test("client /auth/me: both cookies => 200 (client wins) with data.actor.kind=client", async () => {
   await withServer(async (baseUrl) => {
+    const clientCookie = await loginAndGetCookie(baseUrl, {
+      surface: "client"
+    });
+
+    const mixedCookie = `${clientCookie}; bk_admin_session=some_admin_cookie`;
+
     const res = await fetch(`${baseUrl}/api/client/auth/me`, {
       method: "GET",
       headers: {
         accept: "application/json",
-        cookie: "bk_admin_session=dev_admin_cookie; bk_client_session=dev_client_cookie",
+        cookie: mixedCookie,
       },
     });
 

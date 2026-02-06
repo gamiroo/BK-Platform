@@ -1,121 +1,147 @@
 // src/frontend/admin/src/app.ts
-// Admin surface application bootstrapper
 //
-// Purpose:
-// - Decide the initial route deterministically without UI flicker.
-// - Gate the Admin surface using /api/admin/auth/me.
-// - NEVER call the browser network API directly.
-//   All HTTP must flow through src/frontend/lib/http-client.ts.
-//
-// Why this matters:
-// - Prevents "request drift" (credentials, headers, envelopes).
-// - Keeps error semantics stable across all frontends.
-// - Ensures consistent observability (request_id) in dev logs.
+// Admin surface bootstrapper with 3-state auth gate.
+// Supports BOTH deployments:
+// - shared host:   /admin/login, /admin/dashboard
+// - admin domain:  /login, /dashboard   (e.g. admin.localtest.me)
 
-import { startRouter, type Route } from "./router/router.js";
 import { el, clear } from "./shared/dom.js";
+import { httpGet, httpPost, expectOk, HttpClientError } from "../../lib/http-client.js";
 
-import { renderAdminShell } from "./views/layout/shell.js";
 import { renderAdminLoginPage } from "./views/pages/login.page.js";
 import { renderAdminDashboardPage } from "./views/pages/dashboard.page.js";
 import { renderAdminNotFoundPage } from "./views/pages/not-found.page.js";
 
-import { httpGet } from "../../lib/http-client.js";
-
-type MeResponse = Readonly<
-  | { ok: true }
-  | { ok: false; reason: "unauthenticated" | "unavailable" }
->;
-
 /**
- * Minimal "me" probe for boot routing.
- *
- * Contract:
- * - Never throws (we treat all failures as data).
- * - "unauthenticated" means: server reachable but user has no valid admin session.
- * - "unavailable" means: network/response failure (server down, CORS, etc.).
- *
- * Notes:
- * - We do NOT use expectOk() here on purpose. Boot routing is clearer when we
- *   branch on the union result rather than throw/catch.
- * - /api/admin/auth/me is expected to return the canonical envelope:
- *   Success: { ok:true, request_id, data: ... }
- *   Error:   { ok:false, request_id, error:{ code, message } }
+ * Route base detection:
+ * - If hostname starts with "admin." => mount at "/"
+ * - Else => assume shared-host mount at "/admin"
  */
-async function adminMe(): Promise<MeResponse> {
-  const r = await httpGet<unknown>("/api/admin/auth/me");
-
-  if (r.ok) {
-    return { ok: true };
-  }
-
-  // http-client normalizes these local failures into stable error codes.
-  // Treat them as "unavailable" so we land on login safely (no crash).
-  if (r.error.code === "NETWORK_ERROR" || r.error.code === "INVALID_RESPONSE") {
-    return { ok: false, reason: "unavailable" };
-  }
-
-  // Any other failure is treated as an auth miss:
-  // - UNAUTHENTICATED / FORBIDDEN / WRONG_SURFACE etc.
-  return { ok: false, reason: "unauthenticated" };
+function adminBasePath(): "" | "/admin" {
+  const h = window.location.hostname.toLowerCase();
+  return h.startsWith("admin.") ? "" : "/admin";
 }
 
-/**
- * Deterministic navigation helper.
- * We use replaceState to avoid a back-button loop (boot -> login -> boot).
- */
-function navigate(path: string): void {
-  window.history.replaceState({}, "", path);
+type Page = "login" | "dashboard";
+
+function pagePath(base: "" | "/admin", page: Page): string {
+  if (base === "") return page === "login" ? "/login" : "/dashboard";
+  return page === "login" ? "/admin/login" : "/admin/dashboard";
+}
+
+function parsePage(base: "" | "/admin", pathname: string): Page | "not-found" {
+  const login = pagePath(base, "login");
+  const dash = pagePath(base, "dashboard");
+
+  // Normalize base root → login
+  if (base === "" && (pathname === "/" || pathname === "")) return "login";
+  if (base === "/admin" && (pathname === "/admin" || pathname === "/admin/")) return "login";
+
+  if (pathname === login) return "login";
+  if (pathname === dash) return "dashboard";
+
+  return "not-found";
+}
+
+type BootAuth =
+  | Readonly<{ state: "authed" }>
+  | Readonly<{ state: "unauthed"; reason: "unauthenticated" | "unavailable" }>;
+
+/** Boot probe: /api/admin/auth/me */
+async function adminMe(): Promise<BootAuth> {
+  const r = await httpGet<unknown>("/api/admin/auth/me");
+
+  if (r.ok) return { state: "authed" };
+
+  if (r.error.code === "NETWORK_ERROR" || r.error.code === "INVALID_RESPONSE") {
+    return { state: "unauthed", reason: "unavailable" };
+  }
+
+  return { state: "unauthed", reason: "unauthenticated" };
+}
+
+/** Logout: /api/admin/auth/logout (best-effort) */
+async function adminLogout(): Promise<void> {
+  try {
+    expectOk(await httpPost<Readonly<Record<string, never>>>("/api/admin/auth/logout", {}));
+  } catch (err: unknown) {
+    if (err instanceof HttpClientError) return;
+    // eslint-disable-next-line no-console
+    console.error("[admin-logout] unexpected error", err);
+  }
+}
+
+function setPath(path: string, push: boolean): void {
+  if (push) window.history.pushState({}, "", path);
+  else window.history.replaceState({}, "", path);
 }
 
 export function startAdminApp(root: HTMLElement): void {
-  // Simple boot screen (prevents flicker while deciding route)
   const boot = el("div", { style: "padding: 20px; opacity: 0.85;" }, "Loading…");
   root.append(boot);
 
-  // We deliberately start async work without making startAdminApp async.
-  // This avoids "no-misused-promises" patterns and keeps the bootstrap deterministic.
   void (async () => {
-    const me = await adminMe();
+    const base = adminBasePath();
 
-    // Decide initial route deterministically.
-    // If the server is unavailable, we still land on login (safe + calm).
-    if (me.ok) navigate("/admin/dashboard");
-    else navigate("/admin/login");
+    // Determine auth once
+    const bootAuth = await adminMe();
+    let authed = bootAuth.state === "authed";
 
-    // Replace boot screen with routed content.
+    // Deterministic initial route
+    const initial = authed ? pagePath(base, "dashboard") : pagePath(base, "login");
+    if (window.location.pathname !== initial) setPath(initial, false);
+
     clear(root);
 
-    const routes: readonly Route[] = [
-      {
-        path: "/admin/login",
-        render: (r) => renderAdminLoginPage(r),
-      },
-      {
-        path: "/admin/dashboard",
-        render: (r) => renderAdminDashboardPage(r),
-      },
-      {
-        path: "/admin/not-found",
-        render: (r) => renderAdminNotFoundPage(r),
-      },
-    ];
+    const render = (): void => {
+      const page = parsePage(base, window.location.pathname);
 
-    // Wrap pages in the Admin shell (surface-scoped).
-    // We create a per-route content root so the shell can control layout
-    // while each page remains isolated and testable.
-    startRouter({
-      root,
-      routes: routes.map((rt) => ({
-        ...rt,
-        render: (r) => {
-          const contentRoot = document.createElement("div");
-          rt.render(contentRoot);
+      if (page === "not-found") {
+        root.replaceChildren();
+        renderAdminNotFoundPage(root);
+        return;
+      }
 
-          const shell = renderAdminShell(contentRoot);
-          r.append(shell);
+      // Gate: unauthed => login only
+      if (!authed && page !== "login") {
+        setPath(pagePath(base, "login"), false);
+        render();
+        return;
+      }
+
+      // Gate: authed => dashboard only
+      if (authed && page === "login") {
+        setPath(pagePath(base, "dashboard"), false);
+        render();
+        return;
+      }
+
+      root.replaceChildren();
+
+      if (page === "login") {
+        renderAdminLoginPage(root, {
+          onLoggedIn: () => {
+            authed = true;
+            setPath(pagePath(base, "dashboard"), true);
+            render();
+          },
+        });
+        return;
+      }
+
+      renderAdminDashboardPage(root, {
+        onLogout: () => {
+          void (async () => {
+            await adminLogout();
+            authed = false;
+            setPath(pagePath(base, "login"), true);
+            render();
+          })();
         },
-      })),
-    });
+      });
+    };
+
+    window.addEventListener("popstate", () => render());
+    render();
   })();
 }

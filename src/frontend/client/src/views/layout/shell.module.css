@@ -1,3 +1,11 @@
+/* shell.module.css
+ *
+ * Goals:
+ * - Desktop: show header logout, hide hamburger.
+ * - Mobile: show hamburger, hide header logout (logout lives inside menu panel).
+ * - Keep layout stable and accessible.
+ */
+
 .shell {
   min-height: 100vh;
   display: flex;
@@ -6,6 +14,7 @@
   color: var(--bk-fg);
 }
 
+/* Skip link */
 .skip {
   position: absolute;
   left: -9999px;
@@ -23,6 +32,7 @@
   box-shadow: var(--bk-shadow-2);
 }
 
+/* Header */
 .header {
   position: sticky;
   top: 0;
@@ -64,8 +74,11 @@
   gap: var(--bk-space-2);
 }
 
-.logout {
+/* Header buttons share the same “pill” feel */
+.logout,
+.hamburger {
   height: 38px;
+  min-width: 38px;
   padding: 0 12px;
   border-radius: 999px;
   border: 1px solid var(--bk-border);
@@ -75,35 +88,53 @@
   cursor: pointer;
 }
 
-.logout:hover {
-  background: var(--bk-surface-hover);
-}
-
-.logout:focus-visible {
-  outline: 2px solid var(--bk-accent);
-  outline-offset: 2px;
-}
-
 .hamburger {
-  width: 38px;
-  height: 38px;
-  border-radius: 999px;
-  border: 1px solid var(--bk-border);
-  background: var(--bk-surface);
-  color: inherit;
-  font-weight: 900;
-  cursor: pointer;
+  /* burger uses icon, so padding can be tighter */
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
 }
 
+.logout:hover,
 .hamburger:hover {
   background: var(--bk-surface-hover);
 }
 
+.logout:focus-visible,
 .hamburger:focus-visible {
   outline: 2px solid var(--bk-accent);
   outline-offset: 2px;
 }
 
+/* ✅ Responsive header behavior
+ * Desktop: logout visible, hamburger hidden
+ * Mobile: hamburger visible, logout hidden (logout is inside the menu)
+ */
+@media (min-width: 901px) {
+  .hamburger {
+    display: none;
+  }
+
+  .logout {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+}
+
+@media (max-width: 900px) {
+  .hamburger {
+    display: inline-flex;
+  }
+
+  .logout {
+    display: none;
+  }
+}
+
+/* Main */
 .main {
   flex: 1;
   padding: var(--bk-space-6) var(--bk-space-4);

@@ -14,6 +14,8 @@
 
 🔒 Session cookies are **opaque**, server‑side, HttpOnly, surface‑isolated
 
+🔑 Passwords are never stored; **password hashes use Argon2id (PHC string format)**
+
 🔐 Authentication is **AAL‑aware** (supports MFA + passkeys + step‑up)
 
 🚫 No business logic in transport layers
@@ -53,7 +55,14 @@ This document MUST be read alongside:
 - `balance_kitchen_architecture.md`
 - `balanceguard_structure.md`
 - `balanceguard_compliance_routes.md`
+- `balanceguard_auth_csrf_surface_isolation.md` ✅ (auth boot, CSRF, cookie isolation)
 - `balance_kitchen_schema.md`
+
+### 0.2 Cryptography primitives (canonical)
+
+- Password hashing: **Argon2id** (PHC string storage)
+- Session tokens: opaque random tokens (server-side authoritative)
+- Token hashing (server-side storage): one-way hash (implementation-defined; never store raw tokens)
 
 ---
 
@@ -178,6 +187,9 @@ Cookie attributes:
 - `Secure: true` (prod)
 - `SameSite=None` (when cross‑origin)
 - `__Host-` prefix in production
+
+> **Canonical implementation reference:** `balanceguard_auth_csrf_surface_isolation.md`  
+> This includes: surface cookie names, CSRF cookie rules, dev vs prod behavior, and frontend boot/routing gates.
 
 ---
 
@@ -318,8 +330,14 @@ BalanceGuard NEVER authorizes specific resources.
 - Required for **all state‑changing, session‑bearing routes**
 - Includes logout, email change, MFA actions
 - Excludes public unauthenticated endpoints
+- CSRF is **per-surface** (`bk_csrf_admin`, `bk_csrf_client`)
+- CSRF cookies are **not HttpOnly** (frontend must read and echo them)
+- The legacy shared CSRF cookie is **removed** (no `bk_csrf` in the final design)
 
 Strategy: double‑submit cookie (canonical).
+
+> **Canonical implementation reference:** `balanceguard_auth_csrf_surface_isolation.md`  
+> This includes: per-surface CSRF cookie naming, header rules, and the enforced route contracts for login/logout/me.
 
 ---
 

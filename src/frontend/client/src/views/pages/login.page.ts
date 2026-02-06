@@ -2,39 +2,32 @@
 //
 // Client login page.
 //
-// Non-negotiables:
-// - NEVER call the browser network API directly.
-// - ALWAYS use the canonical frontend HTTP client.
-// - Treat HttpClientError as the expected failure path.
-// - Never leak internal error details to the user.
-//
-// This file previously had a placeholder "always succeed" timer.
-// We replace it with a real POST /api/client/auth/login call.
+// Rules:
+// - NEVER call fetch() directly (use http-client).
+// - Server is the source of truth for cookies (session + CSRF).
+// - This page must NOT write cookies via document.cookie.
+//   (Writing cookies client-side causes duplicates + path drift.)
 
 import { mustClass } from "../../../../../frontend/shared/css-modules.js";
 import { uiCard, uiSectionHeader } from "../../../../../frontend/shared/ui/index.js";
 import { el, clear } from "../../shared/dom.js";
-import { renderClientShell } from "../layout/shell.js";
 import styles from "./login.module.css";
 
-import {
-  httpPost,
-  expectOk,
-  HttpClientError,
-} from "../../../../../frontend/lib/http-client.js";
+import { httpPost, expectOk, HttpClientError } from "../../../../../frontend/lib/http-client.js";
 
-/**
- * Server contract (minimal):
- * - /api/client/auth/login returns the canonical envelope.
- * - Success data may be empty for now.
- *
- * We still type it so the call site stays stable when we later
- * return actor/context details.
- */
-type ClientLoginResponse = Readonly<Record<string, never>>;
+type ClientLoginResponse = Readonly<{
+  actor: Readonly<{
+    kind: "client";
+    role: "client";
+    user_id: string;
+  }>;
+  // csrf metadata can exist, but the UI does not need it
+  csrf_token?: string;
+  csrf_cookie?: string;
+}>;
 
-async function login(email: string, password: string): Promise<void> {
-  expectOk(
+async function login(email: string, password: string): Promise<ClientLoginResponse> {
+  return expectOk(
     await httpPost<ClientLoginResponse>("/api/client/auth/login", {
       email,
       password,
@@ -42,16 +35,13 @@ async function login(email: string, password: string): Promise<void> {
   );
 }
 
-/**
- * Convert HttpClientError into calm, user-safe copy.
- * Keep this conservative until server error codes/messages are final.
- */
 function friendlyLoginError(err: HttpClientError): string {
   switch (err.code) {
     case "NETWORK_ERROR":
       return "Unable to reach the server. Please try again.";
     case "INVALID_RESPONSE":
       return "Unexpected server response. Please try again.";
+    case "AUTH_INVALID":
     case "UNAUTHENTICATED":
       return "Incorrect email or password.";
     case "WRONG_SURFACE":
@@ -63,7 +53,7 @@ function friendlyLoginError(err: HttpClientError): string {
 
 export function renderClientLoginPage(
   root: HTMLElement,
-  opts: Readonly<{ onLoggedIn: () => void }>
+  opts: Readonly<{ onLoggedIn: () => void | Promise<void> }>
 ): void {
   root.replaceChildren();
 
@@ -95,54 +85,54 @@ export function renderClientLoginPage(
     type: "password",
   }) as HTMLInputElement;
 
-  const btn = el(
-    "button",
-    { class: mustClass(styles, "button"), type: "submit" },
-    "Log in"
-  ) as HTMLButtonElement;
+  const btn = el("button", { class: mustClass(styles, "button"), type: "submit" }, "Log in") as HTMLButtonElement;
 
   form.append(status, email, pass, btn);
   card.body.append(form);
 
-  // Keep handler sync; launch async explicitly.
+  const setStatus = (msg: string): void => {
+    clear(status);
+    status.textContent = msg;
+  };
+
+  const setDisabled = (disabled: boolean): void => {
+    btn.disabled = disabled;
+    email.disabled = disabled;
+    pass.disabled = disabled;
+  };
+
   form.addEventListener("submit", (e) => {
     e.preventDefault();
-
-    clear(status);
-    status.textContent = "";
 
     const emailValue = email.value.trim();
     const passValue = pass.value;
 
-    btn.disabled = true;
+    setStatus("");
+    setDisabled(true);
+    setStatus("Signing in…");
 
     void (async () => {
       try {
+        // ✅ Server sets session + CSRF cookies via Set-Cookie.
+        // Do NOT write cookies client-side.
         await login(emailValue, passValue);
 
-        // On success, route to dashboard via callback.
-        // The router/app will re-check /auth/me on next boot if needed.
-        opts.onLoggedIn();
+        // ✅ Let the app-level gate update auth + route.
+        await opts.onLoggedIn();
       } catch (err: unknown) {
         if (err instanceof HttpClientError) {
-          status.textContent = friendlyLoginError(err);
+          setStatus(friendlyLoginError(err));
           return;
         }
 
-        // Programmer bug: surface in console, show generic message.
         // eslint-disable-next-line no-console
         console.error("[client-login] unexpected error", err);
-
-        status.textContent = "Login failed. Please try again.";
+        setStatus("Login failed. Please try again.");
       } finally {
-        btn.disabled = false;
+        setDisabled(false);
       }
     })();
   });
 
-  const content = el("div", { class: mustClass(styles, "page") }, header, card.el);
-
-  // Login page renders shell too (footer has theme toggle; menu also exists).
-  // On the login page, logout is a no-op.
-  root.append(renderClientShell(content, { onLogout: () => {} }));
+  root.append(el("div", { class: mustClass(styles, "page") }, header, card.el));
 }

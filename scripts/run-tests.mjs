@@ -3,6 +3,14 @@ import { spawnSync } from "node:child_process";
 import { readdirSync, statSync } from "node:fs";
 import path from "node:path";
 
+if (process.env.NODE_ENV === "production") {
+  console.error(
+    "[tests] Refusing to run tests with NODE_ENV=production.\n" +
+    "Use: pnpm test:ci (dotenv -e .env.test)"
+  );
+  process.exit(1);
+}
+
 const ROOT = process.cwd();
 const TESTS_DIR = path.join(ROOT, "tests");
 

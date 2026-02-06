@@ -59,6 +59,26 @@ Tables that store actions or events SHOULD store:
 
 `request_id` correlates the write to BalanceGuard request context.
 
+### 1.2.1 Idempotency Keys (Mandatory for Economic Writes)
+
+Any write that represents an economic fact MUST be idempotent at the database layer.
+
+Required pattern:
+
+- Store an `idempotency_key text not null` on the write table (or event table)
+- Enforce uniqueness with a constraint scoped to the account:
+  - unique (`account_id`, `idempotency_key`)
+
+Applies to:
+
+- credit consumption / grants / reversals
+- reward shop purchases and redemptions
+- order confirmation and cancellation transitions
+- checkout creation attempts (optional but recommended)
+
+Rationale:
+Prevents double-spend and duplicate side-effects on retries, webhook replays, and race conditions.
+
 ### 1.3 Actor Attribution
 
 Tables representing actions SHOULD store:
@@ -75,6 +95,29 @@ Tables representing actions SHOULD store:
 
 Use `text` columns with CHECK constraints for enums (portable and Drizzle-friendly).
 
+### 1.6 Environment Marker (Operational Safety)
+
+BK uses a single-row environment marker table to reduce the risk of “wrong DB” incidents
+(e.g., accidentally running migrations or seed scripts against production).
+
+This table is written by controlled scripts only (e.g., during provisioning or CI),
+and can be checked by “DB safety” tooling before destructive operations.
+
+#### bk_env_marker
+
+Columns:
+
+- `id int primary key` (always `1`)
+- `env text not null` (e.g., `development`, `test`, `production`)
+- `updated_at timestamptz not null default now()`
+
+Notes:
+
+- Treat this as an **operational guardrail**, not an auth/security primitive.
+- Your DB safety checks MAY enforce:
+  - “production DB must have env='production'”
+  - “non-prod must never have env='production'”
+
 ---
 
 ## 2. Identity & Access Control
@@ -89,12 +132,27 @@ Columns:
 - `email text not null unique`
 - `email_verified_at timestamptz null`
 - `display_name text null`
+
+- `password_hash text null`
+  - Nullable to allow future flows (invite-only, magic link, OAuth) where a local password may not exist yet.
+  - If present, it MUST store a PHC-formatted Argon2id hash string (see below).
+
 - `status text not null` CHECK IN (`ACTIVE`,`SUSPENDED`,`DELETED`)
 - `created_at`, `updated_at`, `deleted_at`
 
 Indexes:
 
 - unique index on `lower(email)`
+
+Password hashing:
+
+- Algorithm: **Argon2id**
+- Storage format: store the **full PHC string** produced by the hashing library in `users.password_hash`
+  (e.g., `$argon2id$v=19$m=...,t=...,p=...$salt$hash`).
+- Application rules:
+  - Never store plaintext passwords.
+  - Verification uses the stored PHC hash as the source of truth.
+  - Support “needs rehash” upgrades when parameters are raised over time.
 
 ---
 
@@ -260,19 +318,41 @@ Columns:
 
 - `id uuid pk`
 - `request_id uuid not null`
-- `stripe_event_id text not null unique`
+- `stripe_event_id text not null`
 - `event_type text not null`
 - `livemode boolean not null`
 - `payload_json jsonb not null`
 - `received_at timestamptz not null default now()`
+
 - `processed_at timestamptz null`
 - `process_status text not null` CHECK IN (`RECEIVED`,`PROCESSED`,`FAILED`)
 - `failure_reason text null`
 
+- `processing_started_at timestamptz null`
+- `processing_attempts int not null default 0`
+- `last_error_code text null`
+
+constraints:
+
+- unique (stripe_event_id, livemode)
+- processing_attempts >= 0
+- processed_at is null OR processed_at >= received_at
+- processing_started_at is null OR processing_started_at >= received_at
+
 Indexes:
 
-- index on `process_status`
-- index on `received_at`
+- index on (`process_status`, `received_at`)
+- index on (`stripe_event_id`, `livemode`)
+
+Payload policy (Mandatory):
+
+- `payload_json` MUST be treated as sensitive operational data.
+- Do not store the full raw payload unless required for debugging or dispute resolution.
+- If stored, payload MUST be redacted (no emails, names, addresses, full card details).
+- Preferred: store a minimal subset required for reconciliation:
+  - event id/type/livemode
+  - object ids (customer, invoice, payment_intent, subscription, checkout_session)
+  - amounts/currency/status where applicable
 
 ---
 
@@ -285,22 +365,102 @@ Columns:
 - `id uuid pk`
 - `request_id uuid not null`
 - `account_id uuid not null fk accounts(id)`
-- `stripe_object_type text not null` (invoice, payment_intent, charge)
+
+- `stripe_object_type text not null`
+  CHECK IN (`checkout_session`,`invoice`,`payment_intent`,`charge`,`refund`)
 - `stripe_object_id text not null`
-- `kind text not null` CHECK IN (`CHARGE`,`REFUND`,`ADJUSTMENT`)
+
+- `purpose text not null`
+  CHECK IN (`PACK_PURCHASE`,`SUBSCRIPTION_PAYMENT`,`CREDITS_TOPUP`,`OTHER`)
+
+- `kind text not null`
+  CHECK IN (`CHARGE`,`REFUND`,`ADJUSTMENT`)
+
 - `amount_cents bigint not null`
 - `currency text not null`
 - `status text not null` CHECK IN (`SUCCEEDED`,`PENDING`,`FAILED`)
 - `occurred_at timestamptz not null`
 - `created_at`, `updated_at`
 
+Optional correlation fields (recommended):
+
+- `stripe_customer_id text null`
+- `stripe_subscription_id text null`
+- `stripe_invoice_id text null`
+
 Constraints:
 
 - unique (`stripe_object_type`,`stripe_object_id`,`kind`)
+- `amount_cents >= 0`
 
 Indexes:
 
 - index on (`account_id`,`occurred_at`)
+- index on (`stripe_customer_id`)
+- index on (`stripe_subscription_id`)
+
+### 6.4 billing_line_items
+
+Breakdown of a billing transaction for audit + domain correlation.
+
+Columns:
+
+- `id uuid pk`
+- `request_id uuid not null`
+- `billing_transaction_id uuid not null fk billing_transactions(id) on delete cascade`
+
+- `line_type text not null` CHECK IN (`PACK`,`SUBSCRIPTION`,`CREDITS_TOPUP`)
+- `stripe_price_id text null`
+- `quantity int not null default 1` CHECK (`quantity > 0`)
+
+-- Domain correlation (no meaning here; just pointers)
+
+- `bk_reference_type text not null` CHECK IN (`PACK_PRODUCT`,`SUBSCRIPTION_PLAN`)
+- `bk_reference_id uuid not null`
+
+- `created_at`, `updated_at`
+
+Constraints:
+
+- unique (`billing_transaction_id`,`line_type`,`bk_reference_type`,`bk_reference_id`)
+- (
+    (line_type = 'PACK' AND bk_reference_type = 'PACK_PRODUCT')
+ OR (line_type = 'SUBSCRIPTION' AND bk_reference_type = 'SUBSCRIPTION_PLAN')
+ OR (line_type = 'CREDITS_TOPUP' AND bk_reference_type IN ('PACK_PRODUCT','SUBSCRIPTION_PLAN')) -- if you ever top-up via a SKU; otherwise remove this clause
+  )
+
+Indexes:
+
+- index on (`billing_transaction_id`)
+- index on (`bk_reference_type`,`bk_reference_id`)
+
+### 6.5 billing_refunds
+
+Refund records linked to billing transactions.
+
+Columns:
+
+- `id uuid pk`
+- `request_id uuid not null`
+- `account_id uuid not null fk accounts(id)`
+- `billing_transaction_id uuid not null fk billing_transactions(id) on delete cascade`
+- `stripe_refund_id text not null unique`          -- Stripe `re_...`
+- `stripe_charge_id text null`                     -- Stripe `ch_...` (optional)
+- `amount_cents bigint not null` CHECK (`amount_cents > 0`)
+- `currency text not null`
+- `status text not null` CHECK IN (`PENDING`,`SUCCEEDED`,`FAILED`)
+- `reason text null`
+- `created_at`, `updated_at`
+
+Constraints:
+
+- unique (`billing_transaction_id`,`stripe_refund_id`)
+- `amount_cents > 0`
+
+Indexes:
+
+- index on (`account_id`,`created_at`)
+- index on (`billing_transaction_id`)
 
 ---
 
@@ -386,9 +546,13 @@ Indexes:
 Columns:
 
 - `id uuid pk`
+- `provider_plan_id text not null unique`  -- Stripe `price_...`
+- `currency text not null default 'AUD'`
+- `provider text not null default 'stripe'`
 - `key text not null unique`
 - `title text not null`
 - `status text not null` CHECK IN (`ACTIVE`,`RETIRED`)
+
 - `created_at`, `updated_at`
 
 ---
@@ -401,13 +565,47 @@ Columns:
 - `request_id uuid not null`
 - `account_id uuid not null fk accounts(id)`
 - `plan_id uuid not null fk subscription_plans(id)`
-- `status text not null` CHECK IN (`ACTIVE`,`PAUSED`,`CANCELLED`)
-- `current_period_start timestamptz not null`
-- `current_period_end timestamptz not null`
+- `provider text not null default 'stripe'`
+- `provider_subscription_id text null unique`   -- Stripe `sub_...`
+- `provider_customer_id text null`              -- Stripe `cus_...`
+- `status text not null` CHECK IN (`INCOMPLETE`,`ACTIVE`,`PAST_DUE`,`PAUSED`,`CANCELLED`)
+-- Make periods nullable to allow INCOMPLETE creation pre-webhook:
+- `current_period_start timestamptz null`
+- `current_period_end timestamptz null`
 - `auto_pause_on_pack_zero boolean not null default true`
 - `paused_at timestamptz null`
 - `cancelled_at timestamptz null`
+- `cancel_at_period_end boolean not null default false`
+- `resume_at timestamptz null`
 - `created_at`, `updated_at`
+
+Constraints:
+-- Only one live subscription per account (v1 lock-down)
+-- NOTE: use a partial unique index in Postgres.
+unique (account_id)
+where status in ('INCOMPLETE','ACTIVE','PAST_DUE','PAUSED')
+
+- If status IN (`ACTIVE`,`PAST_DUE`,`PAUSED`) then `current_period_start/end` must be not null.
+- If status=`CANCELLED` then `cancelled_at` may be not null (preferred).
+-- Periods required once subscription is in a running state
+(
+  status not in ('ACTIVE','PAST_DUE','PAUSED')
+  OR (current_period_start is not null AND current_period_end is not null)
+)
+
+-- If cancelled, cancelled_at should be set (soft requirement -> enforce if you want)
+-- Strong version:
+-- (status != 'CANCELLED' OR cancelled_at is not null)
+
+-- Resume scheduling only valid when paused
+(
+  resume_at is null OR status = 'PAUSED'
+)
+
+-- cancel_at_period_end only meaningful when not cancelled
+(
+  status != 'CANCELLED' OR cancel_at_period_end = false
+)
 
 Indexes:
 
@@ -423,6 +621,7 @@ Columns:
 
 - `id uuid pk`
 - `request_id uuid not null`
+- `account_id uuid not null fk accounts(id)`
 - `subscription_id uuid not null fk subscriptions(id)`
 - `period_start timestamptz not null`
 - `period_end timestamptz not null`
@@ -431,15 +630,69 @@ Columns:
 - `override_allowance int not null default 0`
 - `override_used int not null default 0`
 - `promo_unlocked_credits_grant int not null default 0`
+- `event_type text not null`
+- `actor_type text not null`
+- `actor_user_id uuid null fk users(id)`
+- `metadata_json jsonb null`
+- `billing_transaction_id uuid null fk billing_transactions(id)`
+- `idempotency_key text not null`
 - `created_at`, `updated_at`
 
 Constraints:
 
 - unique (`subscription_id`,`period_start`)
+- unique (`account_id`,`idempotency_key`)
+- `period_end > period_start`
+- `override_used <= override_allowance`
 
 Indexes:
 
 - index on (`subscription_id`,`period_start`)
+- index on (`subscription_id`,`created_at`)
+- index on (`account_id`,`created_at`)
+
+### 8.4 subscription_events (Recommended, Locked)
+
+Append-only lifecycle + entitlement audit events for subscriptions.
+
+Columns:
+
+- `id uuid pk`
+- `request_id uuid not null`
+- `account_id uuid not null fk accounts(id)`
+- `subscription_id uuid not null fk subscriptions(id)`
+- `billing_event_id uuid null fk billing_events(id)`                 -- when driven by webhook
+- `billing_transaction_id uuid null fk billing_transactions(id)`     -- when money fact exists
+- `event_type text not null` CHECK IN (
+  `SUBSCRIPTION_CREATED`,
+  `SUBSCRIPTION_CHECKOUT_STARTED`,
+  `SUBSCRIPTION_CHECKOUT_COMPLETED`,
+  `SUBSCRIPTION_INVOICE_PAID`,
+  `SUBSCRIPTION_INVOICE_PAYMENT_FAILED`,
+  `SUBSCRIPTION_PAUSED`,
+  `SUBSCRIPTION_RESUMED`,
+  `SUBSCRIPTION_CANCEL_REQUESTED`,
+  `SUBSCRIPTION_CANCELLED`,
+  `SUBSCRIPTION_PROVIDER_UPDATED`,
+  `SUBSCRIPTION_ENTITLEMENTS_GRANTED`
+)
+- `actor_type text not null`
+- `actor_user_id uuid null fk users(id)`
+- `idempotency_key text not null`
+- `metadata_json jsonb null`
+- `created_at timestamptz not null default now()`
+
+Constraints:
+
+- unique (`account_id`,`idempotency_key`)
+- `billing_event_id is null OR billing_transaction_id is not null`    -- if you want to require money fact for some events, adjust
+
+Indexes:
+
+- index on (`subscription_id`,`created_at`)
+- index on (`account_id`,`created_at`)
+- index on (`billing_event_id`)
+- index on (`billing_transaction_id`)
 
 ---
 
@@ -530,6 +783,7 @@ Columns:
 - `request_id uuid not null`
 - `order_id uuid not null fk orders(id)`
 - `account_id uuid not null fk accounts(id)`
+- `idempotency_key text not null`
 - `event_type text not null`
 - `actor_type text not null`
 - `actor_user_id uuid null fk users(id)`
@@ -537,9 +791,14 @@ Columns:
 - `metadata_json jsonb null`
 - `created_at timestamptz not null default now()`
 
+Constraints:
+
+- unique (`order_id`, `idempotency_key`)
+
 Indexes:
 
 - index on (`order_id`,`created_at`)
+- index on (`order_id`, `idempotency_key`)
 
 ---
 
@@ -561,11 +820,19 @@ Columns:
 - `reference_id uuid not null`
 - `expires_at timestamptz null`
 - `created_at timestamptz not null default now()`
+- `idempotency_key text not null`
+
+Constraints:
+
+- unique (`account_id`, `idempotency_key`)
+- `amount <> 0`
+- `expires_at is null OR expires_at >= created_at`
 
 Indexes:
 
 - index on (`account_id`,`credit_class`,`created_at`)
 - index on `expires_at`
+- index on (`account_id`, `idempotency_key`)
 
 Notes:
 
@@ -613,6 +880,8 @@ Columns:
 - `request_id uuid not null`
 - `account_id uuid not null fk accounts(id)`
 - `reward_item_id uuid not null fk reward_items(id)`
+- `credit_entry_id uuid null fk credit_entries(id)`
+  - Present for PURCHASE events to link the spend to the ledger entry.
 - `event_type text not null` CHECK IN (
   `REWARD_ITEM_PURCHASED`,
   `REWARD_ITEM_ISSUED`,
@@ -624,6 +893,11 @@ Columns:
 - `actor_user_id uuid null fk users(id)`
 - `credit_amount_spent int null`
 - `created_at timestamptz not null default now()`
+- `idempotency_key text not null`
+
+Constraints:
+
+- unique (`account_id`,`idempotency_key`)
 
 Indexes:
 

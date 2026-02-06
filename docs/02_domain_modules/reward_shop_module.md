@@ -122,6 +122,15 @@ Allows ordering after the weekly cutoff.
 - May only be redeemed once per week
 - Redemption is constrained by subscription tier and reason
 
+Redemption contract (Mandatory):
+
+- Redemption consumes a concrete inventory item row (not a boolean flag).
+- Ordering must provide a `redeemLateOrderVoucherUseCase` (or equivalent) that:
+  - verifies ownership (account_id)
+  - verifies item not expired/revoked/already redeemed
+  - records redemption with audit event
+  - is idempotent by `(account_id, item_id)`
+
 ---
 
 #### 5.1.2 Cancellation Voucher (Future)
@@ -179,8 +188,27 @@ To purchase a Reward Shop item:
 - Unlocked credits are consumed
 - Item is issued into account inventory
 - Exchange is **atomic and idempotent**
+Persistence mapping (schema-aligned):
+- Issue the inventory item into `reward_items`
+- Record the purchase and issuance into `reward_item_events`
+- Consume unlocked credits via `credit_entries` (negative UNLOCKED entry)
+- The entire exchange MUST commit atomically
 
 If an exchange partially fails, it must rollback safely.
+
+### 6.2.1 Atomic exchange contract (Mandatory)
+
+Reward Shop purchase MUST be a single atomic operation:
+
+Within one DB transaction:
+
+1) Claim purchase idempotency key (unique by `(account_id, idempotency_key)`).
+2) Verify sufficient unlocked credits at commit time (not check-then-write).
+3) Insert a credits ledger consumption entry (unlocked class).
+4) Insert an inventory item issuance row.
+5) Emit audit event(s).
+
+If any step fails, the entire purchase must rollback.
 
 ### 6.3 Refund Policy (Locked)
 
@@ -207,6 +235,14 @@ Items:
 - May expire
 - May be redeemed once unless explicitly reusable
 - Are never silently removed
+
+Inventory invariants (Mandatory):
+
+- Each inventory item row is the sole proof of ownership.
+- Redemption is one-way:
+  - once `redeemed_at` is set, it must never be cleared.
+- An item may be redeemed at most once unless explicitly marked reusable.
+- Redemption operations MUST be idempotent by `(account_id, item_id)`.
 
 ---
 
@@ -242,6 +278,30 @@ The Reward Shop must enforce:
 - Per‑period caps per item type
 - Prevention of rapid buy‑redeem loops
 - Eligibility checks tied to subscription tier
+
+Idempotency (Mandatory):
+
+- `purchaseItem` and `redeemItem` MUST accept an `idempotency_key`.
+- Duplicate keys are a no-op returning the original result.
+- This is required to prevent duplicate spends on client retries or flaky networks.
+
+Schema requirement (Mandatory):
+
+- `reward_item_events` MUST include `idempotency_key text not null`
+- enforce unique (`account_id`,`idempotency_key`) OR unique (`reward_item_id`,`idempotency_key`)
+  depending on implementation preference.
+
+Rationale:
+
+- Prevent duplicate spend + duplicate issue under retries.
+
+Anti-loop policy (Mandatory):
+
+- The system MUST enforce per-item-type cooldowns and/or per-period caps.
+- Example (v0.1):
+  - Late-order vouchers: max 1 purchase per week, max 1 redemption per week.
+- Violations return `429 RATE_LIMITED` or `403 FORBIDDEN` depending on policy.
+- Suspicious patterns must emit an admin-visible event.
 
 Suspicious patterns must surface to admin.
 

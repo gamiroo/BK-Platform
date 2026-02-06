@@ -16,6 +16,7 @@ Related documents:
 - `balance_kitchen_toolkit.md`
 - `balanceguard.md`
 - `balanceguard_structure.md`
+- `balanceguard_auth_csrf_surface_isolation.md` (auth boot + CSRF + cookie isolation)
 - `balance_kitchen_schema.md`
 - `balance_kitchen_tokens.md`
 - `devops_setup.md` (trunk-based development, CI/CD, migrations, release management)
@@ -268,6 +269,20 @@ CORS modes are explicit and must be declared per route via BalanceGuard options:
 - `site`
 - `client`
 - `admin`
+
+### 2.4.1 Surface Origin Isolation (Mandatory)
+
+In development, using a single origin (e.g. `localhost`) can cause cookies to appear shared across surfaces.
+This is a **dev artifact** of same-host cookie scoping.
+
+Canonical behavior is achieved when each surface has its own origin, e.g.:
+
+- `client.<domain>`
+- `admin.<domain>`
+
+This ensures browser-enforced cookie isolation by origin and keeps BalanceGuard’s surface model secure by construction.
+
+> Canonical reference: `balanceguard_auth_csrf_surface_isolation.md`
 
 ---
 
@@ -984,6 +999,18 @@ Browser
  ├── Client App → /api/client/auth/login → bk_client_session
  └── Admin App  → /api/admin/auth/login  → bk_admin_session
 ```
+
+### 14.1 Frontend Auth Gate (Canonical)
+
+Both `client` and `admin` surfaces implement a deterministic **auth gate** at boot:
+
+- On load/refresh, the app must call `/api/<surface>/auth/me`
+- UI must **not** trust cookie presence alone
+- Dashboard must only render when `/auth/me` returns `200`
+- If `/auth/me` returns `401`, the user is routed to `/login`
+- Logout must clear **session + CSRF cookies** and route to `/login`
+
+> Canonical reference: `balanceguard_auth_csrf_surface_isolation.md`
 
 ---
 
