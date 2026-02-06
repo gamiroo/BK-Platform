@@ -8,15 +8,52 @@ on:
 jobs:
   ci:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
-
-      - uses: pnpm/action-setup@v4
 
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: pnpm
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      # Uses package.json "packageManager": "pnpm@x.y.z"
+      - name: Install pnpm (from packageManager)
+        shell: bash
+        run: |
+          node -e "const pm=require('./package.json').packageManager||''; if(!pm.startsWith('pnpm@')){console.error('packageManager must be pnpm@x.y.z'); process.exit(1);} console.log('packageManager:', pm)"
+          corepack prepare --activate
+
+      - name: Assert pnpm version matches packageManager
+        shell: bash
+        run: |
+          EXPECTED=$(node -p "require('./package.json').packageManager.replace('pnpm@','')")
+          ACTUAL=$(pnpm -v)
+          echo "expected pnpm=$EXPECTED, actual pnpm=$ACTUAL"
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "pnpm version mismatch"
+            exit 1
+          fi
+
+      - name: Toolchain guard (no npm/yarn installs)
+        shell: bash
+        run: |
+          if [ -f package-lock.json ]; then echo "Do not use npm (package-lock.json found)"; exit 1; fi
+          if [ -f yarn.lock ]; then echo "Do not use yarn (yarn.lock found)"; exit 1; fi
+          if [ ! -f pnpm-lock.yaml ]; then echo "pnpm-lock.yaml missing"; exit 1; fi
+
+      # Now that pnpm exists, caching is safe
+      - name: Restore pnpm store cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pnpm-store
+            ~/.cache/pnpm
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
 
       - name: Install
         run: pnpm install --frozen-lockfile
@@ -31,10 +68,18 @@ jobs:
         run: pnpm lint
 
       - name: Test
-        run: pnpm test
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL_TEST }}
+          NODE_ENV: test
+        run: pnpm test:ci
+
 
       - name: Build
         run: pnpm build
+
+      - name: BalanceGuard compliance
+        run: pnpm check-balanceguard
+
 
       - name: BalanceGuard compliance
         run: pnpm check-balanceguard
