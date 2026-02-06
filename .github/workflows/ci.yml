@@ -67,6 +67,12 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      - name: Migrate test DB
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL_TEST }}
+          NODE_ENV: test
+        run: pnpm db:migrate:test
+
       - name: Test
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL_TEST }}
