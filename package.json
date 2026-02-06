@@ -10,22 +10,32 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
-    "test": "node scripts/run-tests.mjs",
+    "test": "pnpm test:ci",
+    "test:ci": "node scripts/run-tests.mjs",
+    "test:with-env:test": "pnpm exec dotenv -e .env.test -- pnpm test:ci",
+    
     "build": "pnpm build:server && pnpm build:site && pnpm build:client && pnpm build:admin",
     "build:server": "tsc -p tsconfig.server.json && tsc-alias -p tsconfig.server.json",
+    
     "check-balanceguard": "node scripts/check-balanceguard.mjs",
     "ci": "pnpm typecheck && pnpm lint && pnpm test && pnpm build && pnpm check-balanceguard",
+
     "db:generate": "dotenv -e .env.local -- drizzle-kit generate --config drizzle.config.ts",
     "db:safety:dev": "dotenv -e .env.local -- node --import tsx scripts/db-safety-check.ts",
     "db:safety:prod": "node --import tsx scripts/db-safety-check.ts",
-    "db:migrate:dev": "pnpm db:safety:dev && dotenv -e .env.local -- drizzle-kit migrate --config drizzle.config.ts",
+    "db:bootstrap:dev": "dotenv -e .env.local -- node --import tsx scripts/db-bootstrap-env-marker.ts",
+    "db:migrate:dev": "pnpm db:bootstrap:dev && pnpm db:safety:dev && dotenv -e .env.local -- drizzle-kit migrate --config drizzle.config.ts",
     "db:migrate:prod": "node scripts/confirm-prod-migrate.mjs && drizzle-kit migrate --config drizzle.config.ts",
+    "db:migrate:test": "drizzle-kit migrate --config drizzle.config.ts",
     "db:studio": "drizzle-kit studio",
     "db:ping": "node --import tsx scripts/db-ping.ts",
+    "db:seed:dev": "dotenv -e .env.local -- node --import tsx scripts/db-seed-identity.ts",
+
     "dev:site": "vite --config src/frontend/site/vite.config.ts",
     "dev:client": "vite --config src/frontend/client/vite.config.ts",
     "dev:admin": "vite --config src/frontend/admin/vite.config.ts",
-    "dev:server": "dotenv -e .env.local -- node --enable-source-maps dist/src/server/http/index.js",
+    "dev:server": "dotenv -e .env.local -- tsx watch --clear-screen=false src/server/http/index.ts",
+
     "build:site": "vite build --config src/frontend/site/vite.config.ts",
     "build:client": "vite build --config src/frontend/client/vite.config.ts",
     "build:admin": "vite build --config src/frontend/admin/vite.config.ts"
@@ -51,6 +61,7 @@
     "vite": "^7.3.1"
   },
   "dependencies": {
+    "argon2": "^0.44.0",
     "balance": "link:",
     "dotenv": "^17.2.3",
     "drizzle-orm": "^0.45.1",

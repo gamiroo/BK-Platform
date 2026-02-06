@@ -32,10 +32,10 @@ Referenced by balance.md
   - **client**: checkout session creation endpoints (often called via Packs/Subscriptions routes)
   - **admin**: (optional) billing diagnostics, refund initiation
 - **Primary persistence:**
-  - `billing_transactions`
-  - `billing_line_items`
-  - `billing_stripe_events`
-  - `billing_refunds` (if enabled)
+- `billing_customers`
+- `billing_events`            ← (webhook idempotency + audit)
+- `billing_transactions`
+- `billing_line_items`  
 
 ---
 
@@ -71,7 +71,7 @@ Billing is the **payment and reconciliation hub**.
 - Provider clients (Stripe SDK initialization)
 - Checkout session creation (payment + subscription modes)
 - Webhook verification and event routing
-- Persistent idempotency / dedupe (`billing_stripe_events`)
+- Persistent idempotency / dedupe (`billing_events`)
 - Normalised transactions (`billing_transactions`) and breakdown (`billing_line_items`)
 - Refund capture/recording (optional)
 
@@ -87,65 +87,37 @@ Billing is the **payment and reconciliation hub**.
 
 ## 3. Data Model (Canonical)
 
-Per `balance_kitchen_schema.md` (billing section):
+Per `balance_kitchen_schema.md` (Billing section):
 
-### 3.1 `billing_stripe_events`
+### 3.1 `billing_customers`
+
+Maps internal `account_id` to `stripe_customer_id`.
+
+Authority:
+
+- Billing is the only writer.
+- Packs/Subscriptions read via Billing use-cases (never direct Stripe calls).
+
+### 3.2 `billing_events` (Webhook idempotency + audit)
 
 Stores Stripe webhook deliveries for idempotency and audit.
 
-Key rules:
+Locked rules:
 
 - Unique on `stripe_event_id`
-- Store minimal/redacted payload only if required
-- Track `status`: `RECEIVED` → `PROCESSED` | `FAILED`
+- Store safe/necessary payload only (see §7.2)
+- Track processing state:
+  - `RECEIVED` → `PROCESSED` | `FAILED`
 
-Implementation note:
+### 3.3 `billing_transactions` (Canonical billing facts)
 
-- `billing_stripe_events.status` is a typed enum:
-  - `RECEIVED` | `PROCESSED` | `FAILED`
+Billing transactions are provider-derived facts (charge/refund/adjustment),
+keyed uniquely by `(stripe_object_type, stripe_object_id, kind)`.
 
-### 3.2 `billing_transactions`
+Locked rules:
 
-Canonical ledger of monetary transactions.
-
-Typical transaction kinds:
-
-- `PACK_PURCHASE`
-- `SUBSCRIPTION_PAYMENT`
-- (future) `CREDITS_TOPUP`
-- `REFUND`
-
-Must store:
-
-- amount, currency
-- provider object ids: checkout session id, payment intent id, invoice id, charge id
-- references to `account_id`
-- `request_id` where applicable
-
-### 3.3 `billing_line_items`
-
-Breakdown per transaction.
-
-Line item types:
-
-- `PACK`
-- `SUBSCRIPTION`
-- `CREDIT`
-
-### 3.4 `billing_refunds` (optional)
-
-If you support refunds, record them separately and link to the transaction.
-
-### 3.5 Billing (Stripe Integration Core)
-
-**Spec:** `billing_module.md`
-
-- Stripe SDK integration
-- Webhook verification and idempotency (Stripe Event `id` claimed in `billing_stripe_events`)
-- Canonical transaction ledger
-- Dispatch of billing facts to domain modules
-
-Billing is the **only module** permitted to communicate with Stripe.
+- Billing is authoritative for money facts.
+- Domain meaning (pack/subscription/credits) is derived using correlation metadata and dispatched to owning modules.
 
 ---
 
@@ -162,8 +134,34 @@ Responsibilities:
 
 - Read raw body (`req.text()`)
 - Verify Stripe signature (`stripe-signature` + signing secret)
-- Dedupe by `event.id` in `billing_stripe_events`
+- Dedupe by `event.id` in `billing_events` (unique `stripe_event_id`)
 - Route event to Billing webhook use-case
+
+Event allowlist (Mandatory):
+
+- Billing MUST maintain a strict allowlist of Stripe event types it will process.
+- Unknown event types MUST:
+  - be recorded in `billing_events` as `RECEIVED` then `PROCESSED` (no-op),
+  - emit `stripe.webhook.ignored` log (safe metadata only),
+  - return `200` to Stripe.
+
+Strict parsing (Mandatory):
+
+- Billing MUST treat all Stripe object fields as untrusted input.
+- Never assume expansions exist.
+- Never assume nested objects are present; handle missing fields deterministically.
+
+### Livemode / environment guard (Mandatory)
+
+Billing MUST enforce environment consistency:
+
+- In production, reject (record as FAILED) any event where `livemode=false`.
+- In non-production, you may accept both, but MUST label logs and stored events clearly.
+
+Policy:
+
+- Always return `200` to Stripe once recorded (to stop retries),
+  but set `billing_events.process_status=FAILED` with `failure_reason="LIVEMODE_MISMATCH"`.
 
 Security posture:
 
@@ -184,6 +182,33 @@ Recommended transport approach:
 
 Billing should NOT own the client route semantics for pack/subscription selection; it can provide reusable helpers.
 
+### 4.3 Admin diagnostics (Optional, strict)
+
+If Billing exposes admin diagnostics:
+
+- Must be `admin` surface only (BalanceGuard auth + origin + csrf).
+- Must never return Stripe secrets, raw webhook payloads, or full provider objects.
+- Must return only:
+  - billing_transaction summaries
+  - event processing status
+  - safe provider ids (e.g. `pi_...`, `in_...`, `sub_...`)
+
+### 4.4 Return URL hardening (Mandatory)
+
+Any user-supplied `success_url` / `cancel_url` (from Packs/Subscriptions checkout initiation)
+MUST be validated as a safe return URL.
+
+Rules (locked):
+
+- Only allow https URLs in production.
+- Host MUST be allowlisted per-surface (e.g. `client.<domain>`, `admin.<domain>` if ever used).
+- Path MUST be relative-safe (no `//` ambiguity); querystring allowed.
+- Never allow arbitrary external domains.
+- If validation fails: return `400 VALIDATION_FAILED` (safe details).
+
+Rationale:
+Prevents open-redirect attacks and “checkout bounce” phishing.
+
 ---
 
 ## 5. Application Layer (Use-cases)
@@ -197,7 +222,7 @@ Input:
 
 Responsibilities:
 
-1. Claim idempotency (`billing_stripe_events` insert)
+1. Claim idempotency (`billing_events` insert)
 2. If duplicate → return `{ received: true }`
 3. Route known event types to domain-specific handlers:
    - Subscriptions:
@@ -219,6 +244,50 @@ Idempotency rules:
 - Never apply side effects twice for the same `event.id`
 - Processing should be safe for retries
 
+### 5.1.0 Transaction boundary (Mandatory)
+
+Webhook processing MUST be executed within a single DB transaction where possible:
+
+- Insert/claim `billing_events` (idempotency claim)
+- Persist derived billing facts (`billing_transactions`, `billing_line_items`, refunds)
+- Dispatch to domain handlers (Packs/Subscriptions) which must also write within the same transaction
+  OR must be designed to be independently idempotent if dispatched outside.
+
+Finally:
+
+- mark `billing_events` as `PROCESSED` or `FAILED`
+
+Rule:
+
+- Never mark `PROCESSED` unless all required writes and downstream domain updates have completed.
+
+### 5.1.1 Out-of-order & retry semantics (Mandatory)
+
+Stripe events may arrive:
+
+- out of order
+- duplicated
+- retried after timeouts
+- with provider objects missing expected expansions
+
+Rules (locked):
+
+- Billing must be safe to replay the same `event.id` (no double side effects).
+- Domain side effects must be conditional on current persisted state
+  (e.g., do not mark a purchase PAID twice; do not grant entitlements twice).
+- If a required BK correlation reference is missing:
+  - mark the stripe event `FAILED`
+  - emit `stripe.webhook.failed` log with safe reason
+  - return `200` to Stripe (to prevent infinite retries), unless you deliberately want retries.
+
+Return codes (Locked):
+
+- Billing SHOULD return `200` to Stripe once the event is durably recorded in `billing_events`
+  (delivery acknowledgement).
+- Business success/failure is tracked in `billing_events.process_status`.
+- For non-recoverable correlation failures, set `FAILED`, log safe reason, still return `200`
+  to prevent infinite retries (unless you explicitly want Stripe retries for that case).
+
 ### 5.2 `createStripeCheckoutSessionForPack`
 
 Input:
@@ -231,6 +300,15 @@ Input:
 Output:
 
 - `{ checkout_url }` (preferred)
+
+Idempotency (Mandatory):
+
+- Stripe API calls that create resources (Checkout Sessions, refunds) MUST use a BK-generated idempotency key.
+- Key format must be stable and low-cardinality, e.g.:
+  - `bk:pack_checkout:<pack_purchase_id>`
+  - `bk:sub_checkout:<subscription_id>`
+  - `bk:refund:<billing_transaction_id>:<refund_id>`
+- If the same call is retried, Billing must return the original resource (checkout_url/refund status).
 
 ### 5.3 `createStripeCheckoutSessionForSubscription`
 
@@ -246,6 +324,15 @@ Output:
 - `{ checkout_url }`
 
 > These can remain Billing-internal helpers if Packs/Subscriptions own the public use-case.
+
+Idempotency (Mandatory):
+
+- Stripe API calls that create resources (Checkout Sessions, refunds) MUST use a BK-generated idempotency key.
+- Key format must be stable and low-cardinality, e.g.:
+  - `bk:pack_checkout:<pack_purchase_id>`
+  - `bk:sub_checkout:<subscription_id>`
+  - `bk:refund:<billing_transaction_id>:<refund_id>`
+- If the same call is retried, Billing must return the original resource (checkout_url/refund status).
 
 ---
 
@@ -263,6 +350,62 @@ When creating Checkout Sessions, include Stripe metadata:
 - `bk_pack_purchase_id` (for packs)
 - `bk_subscription_id` (for subscriptions)
 - `bk_plan_id`
+
+### 6.1.1 Correlation metadata must be durable across event types (Locked)
+
+Stripe events often arrive without Checkout Session metadata.
+Therefore, Billing MUST ensure correlation keys exist on the provider objects that generate follow-on events:
+
+- For subscription flows:
+  - Copy BK IDs into `subscription_data.metadata` during Checkout creation
+  - So `invoice.*` and `customer.subscription.*` remain correlatable
+
+- For pack flows:
+  - Include BK IDs in Checkout Session metadata
+  - Use billing_events payload parsing to recover BK IDs on `checkout.session.completed`
+
+Mandatory correlation keys (by flow):
+
+- `bk_account_id` (uuid)
+- `bk_subscription_id` (uuid) for subscriptions
+- `bk_pack_id` (uuid) and/or `bk_pack_product_id` (uuid) for pack purchase mapping (see Packs section)
+- optional: `bk_request_id` (uuid) for traceability (never used as authority)
+
+Verification (fail-closed):
+
+- All BK IDs must parse as UUIDs
+- Referenced BK records must exist
+- Records must belong to the referenced `account_id`
+- Cross-account correlation is invalid even if Stripe data “looks valid”
+
+### 6.1.2 Provider object integrity (Mandatory)
+
+### Price / plan allowlist source (Locked)
+
+Billing MUST validate Stripe `price_id` against BK-controlled allowlists:
+
+- Pack checkout: Stripe `price_id` must map to an ACTIVE `pack_products.sku` (or an explicit mapping table).
+- Subscription checkout: Stripe `price_id` must match `subscription_plans.provider_plan_id`.
+
+Deny-by-default:
+
+- If the `price_id` is unknown or inactive → mark FAILED, no dispatch.
+
+For money-moving events (checkout completion, invoice paid, refunds), Billing MUST verify:
+
+- Currency is expected (BK v1: `AUD` only unless explicitly expanded).
+- The Stripe `price_id` / `line_items` correspond to a BK-known product/plan mapping
+  (deny-by-default; no “accept any price from Stripe”).
+- Amounts are non-negative and in minor units.
+- For subscriptions:
+  - invoice belongs to the expected `provider_subscription_id`
+  - subscription belongs to the expected `provider_customer_id` (when known)
+
+If any integrity check fails:
+
+- mark event `FAILED`
+- do not dispatch to Packs/Subscriptions
+- log `stripe.webhook.failed` with safe reason (no PII)
 
 This allows webhook handlers to:
 
@@ -358,7 +501,35 @@ On `customer.subscription.deleted`:
 - Never log raw body or `stripe-signature`
 - Store only redacted event details when necessary
 
-### 7.3 Observability
+### 7.2.1 Payload retention policy (Mandatory)
+
+Even though the schema defines `billing_events.payload_json`, Billing MUST treat it as sensitive:
+
+- Never log raw payloads or the `stripe-signature` header
+- Prefer storing a **minimised payload**:
+  - event id/type/livemode/created
+  - primary Stripe object ids used for correlation (session/invoice/subscription/charge/payment_intent/customer)
+  - BK correlation metadata only (UUIDs)
+- If full payload retention is required for debugging:
+  - restrict access operationally (DB roles)
+  - consider encrypting the JSON at rest in application code before insert
+
+### 7.3 Correlation integrity (Mandatory)
+
+For any event that drives domain state, Billing MUST:
+
+- require BK correlation metadata fields (per event type)
+- verify they parse as UUIDs
+- verify referenced records exist (account/subscription/purchase)
+- verify the record belongs to the referenced account_id
+- refuse cross-account correlation even if Stripe data “looks valid”
+
+If correlation fails:
+
+- set Stripe event status `FAILED`
+- do not dispatch to domain modules
+
+### 7.4 Observability
 
 - Include `requestId` in all logs
 - Log only high-level events:
@@ -369,29 +540,25 @@ On `customer.subscription.deleted`:
 
 ---
 
-## 8. Folder Structure (Recommended)
+## 8. Folder & File Structure (Canonical)
 
-```text
-src/modules/billing/
-  domain/
-  application/
-  infrastructure/
-    stripe/
-    db/
-  transport/http/
+Billing’s canonical file layout is defined in:
 
-src/shared/stripe/
-  stripe-client.ts
-  webhook.ts
-  idempotency.ts
-  events.ts
-```
+- `billing_folder_structure.md`
 
-Notes:
+**Locked rule:**
 
-- `src/shared/stripe/*` is shared cross-cutting infrastructure.
-- Billing owns provider-specific mapping.
-- Packs/Subscriptions own their use-cases + state changes.
+- Any PR that **adds/removes/renames** a Billing file MUST update:
+  1) `billing_folder_structure.md`, and
+  2) this section in `billing_module.md`.
+
+If Billing code layout and the folder-structure doc disagree, the folder-structure doc wins until intentionally revised.
+
+**Boundary reminder:**
+
+- `domain/` must not import DB or Stripe SDK.
+- `transport/` must be thin (BalanceGuard → parse → call use-case → respond).
+- Stripe SDK usage is Billing-only; shared Stripe helpers (if any) must remain generic.
 
 ---
 

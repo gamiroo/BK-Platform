@@ -7,14 +7,19 @@
  *   env = "dev" | "prod"
  *
  * Why:
- * - This prevents the #1 accident: migrating the wrong database.
+ * - Prevents migrating the wrong DB (prod vs dev).
  *
  * Rules:
- * - runtime NODE_ENV is mapped to marker:
+ * - runtime NODE_ENV maps to marker:
  *   - development/test => "dev"
  *   - production       => "prod"
- * - If VERCEL_ENV=production, expected marker MUST be "prod"
+ * - If VERCEL_ENV=production, expected marker MUST be "prod".
+ *
+ * Bootstrap:
+ * - `scripts/db-bootstrap-env-marker.ts` must ensure the table exists + row id=1
+ *   before running db-safety-check or migrations.
  */
+
 
 import { AppError } from "../errors/app-error.js";
 import { loadEnv } from "../config/env.js";
@@ -46,12 +51,11 @@ export function parseDbEnvMarker(raw: string): DbEnvMarker {
     code: "INTERNAL_ERROR",
     status: 500,
     message: "Database env marker invalid",
-    details: { value: raw },
+    details: { value: raw, expected: ["dev", "prod"] },
   });
 }
 
 export function expectedMarkerFromRuntime(input: RuntimeEnvInput): DbEnvMarker {
-  // Vercel production must always target prod DB.
   if (input.vercel_env === "production") return "prod";
 
   switch (input.node_env) {
@@ -61,33 +65,56 @@ export function expectedMarkerFromRuntime(input: RuntimeEnvInput): DbEnvMarker {
     case "test":
       return "dev";
     default: {
-      // Exhaustive guard for future TS widening
       const _exhaustive: never = input.node_env;
       return _exhaustive;
     }
   }
 }
 
+function isMissingRelationError(err: unknown): boolean {
+  // postgres error code 42P01 = undefined_table
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "code" in err &&
+    (err as { code?: unknown }).code === "42P01"
+  );
+}
+
 export async function readDbEnvMarker(h: DbHandle): Promise<DbEnvMarker> {
-  // Expect exactly one marker row (id = 1). Keep SQL minimal and infra-only.
-  const rows = await h.sql<{ env: string }[]>`
-    select env
-    from bk_env_marker
-    where id = 1
-    limit 1
-  `;
+  try {
+    const rows = await h.sql<{ env: string }[]>`
+      select env
+      from bk_env_marker
+      where id = 1
+      limit 1
+    `;
 
-  const row = rows[0];
-  if (!row) {
-    throw new AppError({
-      code: "INTERNAL_ERROR",
-      status: 500,
-      message: "Database env marker missing",
-      details: { table: "bk_env_marker", id: 1 },
-    });
+    const row = rows[0];
+    if (!row) {
+      throw new AppError({
+        code: "INTERNAL_ERROR",
+        status: 500,
+        message: "Database env marker missing row",
+        details: { table: "bk_env_marker", id: 1 },
+      });
+    }
+
+    return parseDbEnvMarker(row.env);
+  } catch (err) {
+    if (isMissingRelationError(err)) {
+      throw new AppError({
+        code: "INTERNAL_ERROR",
+        status: 500,
+        message: "Database env marker table missing",
+        details: {
+          table: "bk_env_marker",
+          fix: "Run pnpm db:bootstrap:dev (or apply initial migrations) before running db:safety-check.",
+        },
+      });
+    }
+    throw err;
   }
-
-  return parseDbEnvMarker(row.env);
 }
 
 export function assertDbEnvMarker(expected: DbEnvMarker, actual: DbEnvMarker): void {

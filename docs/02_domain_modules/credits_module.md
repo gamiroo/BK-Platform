@@ -153,17 +153,25 @@ Credits use a **ledger model**, not a mutable balance.
 
 ### 5.2 Conceptual Ledger Fields
 
-Each credit entry must include:
+Each credit entry MUST include (schema-aligned):
 
-- `credit_entry_id`
-- `account_id`
-- `credit_class` (locked | unlocked)
-- `amount` (positive or negative)
-- `source` (pack, subscription, refund, admin, system, gamification)
-- `reference_type` (order, pack, subscription, refund, etc.)
-- `reference_id`
-- `created_at`
-- `expires_at?`
+- `id` (uuid)
+- `request_id` (uuid)
+- `account_id` (uuid)
+- `credit_class` (`LOCKED` | `UNLOCKED`)
+- `amount` (int; positive grant, negative consume/reversal)
+- `source` (`PACK` | `SUBSCRIPTION_PROMO` | `REFUND` | `ADMIN` | `SYSTEM` | `GAMIFICATION`)
+- `reference_type` (text)
+- `reference_id` (uuid)
+- `expires_at?` (timestamptz)
+
+Additionally required for safety (schema should add):
+
+- `idempotency_key text not null`
+
+Locked constraint:
+
+- unique (`account_id`, `idempotency_key`)
 
 ---
 
@@ -209,6 +217,19 @@ Any credit entry without a source is invalid by definition.
 **Invariant:**
 > Credits do not directly purchase meals **except** via locked credits being consumed through packs.
 
+#### 7.1.1 Locked credit consumption representation (Mandatory)
+
+Even if packs expose a “meal count” UI, the canonical accounting MUST be representable as ledger consumption.
+
+Rules:
+
+- When Ordering consumes a meal backed by a pack, the system MUST record a corresponding
+  locked-credit consumption entry (or an equivalent auditable pack-consumption event that can be reconciled).
+- Consumption entries MUST:
+  - reference the order (reference_type=`order`, reference_id=`order_id`)
+  - be idempotent per ordered line item (see 10.3)
+- Consumption must never touch unlocked credits.
+
 ### 7.2 Credit Conversion (Locked → Unlocked)
 
 Locked credits may be **explicitly unlocked** as a deliberate action.
@@ -243,6 +264,13 @@ Balance projections must:
 
 - Exclude expired credits
 - Respect class separation
+
+Projection correctness (Mandatory):
+
+- Projections MUST be computed from ledger entries only (no “manual overrides”).
+- Projections MUST be reproducible from the same inputs (deterministic).
+- Any cached/materialized projection MUST be treated as derived data and re-buildable.
+- Class separation is enforced at query time (locked vs unlocked never merge).
 
 ---
 
@@ -281,6 +309,46 @@ Refunds and reversals are expressed as **new ledger entries**.
 - Original entries are never deleted
 - Reversal entries must reference the original entry
 - Reversals must reconcile with Billing where money is involved
+
+### 10.2.1 Billing correlation (Mandatory)
+
+If a credit grant/reversal is money-adjacent (packs, refunds, chargebacks):
+
+- The ledger entry MUST reference a Billing transaction/refund identifier.
+- Refund-driven reversals MUST be linked to the original grant via:
+  - `reversal_of_entry_id` (or equivalent reference field)
+- Money-adjacent reversals MUST fail closed if the Billing reference is missing.
+
+## 10.3 Spend Atomicity & Idempotency (Mandatory)
+
+Any credit consumption MUST be:
+
+- atomic (no partial writes)
+- idempotent (safe retries)
+- concurrency-safe (double-spend resistant)
+
+Schema requirement (Mandatory):
+
+- `credit_entries` MUST include `idempotency_key` and enforce uniqueness on (`account_id`,`idempotency_key`).
+- Without this, double-spend prevention is not enforceable at the DB boundary.
+
+Rules (locked):
+
+- Every consume operation requires an `idempotency_key` (string).
+- Ledger entries must include `(account_id, idempotency_key)` with a unique constraint.
+- Consumption must fail closed if available unlocked balance is insufficient at commit time.
+- No “check-then-write” without transactional protection.
+
+Idempotency key format (Recommended):
+
+- Keys should be stable, human-debuggable strings:
+  - `order:<order_id>:consume:<line_item_id>`
+  - `reward_shop:<purchase_id>:buy:<item_type>`
+  - `pack_purchase:<purchase_id>:grant`
+- Keys must never contain secrets or PII.
+
+Rationale:
+Prevents double-spends and race-condition entitlement drift, especially under gamification load.
 
 ---
 
