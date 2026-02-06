@@ -68,7 +68,11 @@ jobs:
         run: pnpm lint
 
       - name: Test
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL_TEST }}
+          NODE_ENV: test
         run: pnpm test:ci
+
 
       - name: Build
         run: pnpm build
