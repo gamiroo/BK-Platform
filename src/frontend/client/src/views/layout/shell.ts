@@ -1,3 +1,13 @@
+// src/frontend/client/src/views/layout/shell.ts
+//
+// Client shell: header + footer + nav + theme toggles + logout wiring.
+//
+// Responsibilities:
+// - Provide consistent chrome (header/footer) around page content.
+// - Provide mobile menu with focus management + a11y.
+// - NEVER perform network calls here.
+//   Logout is delegated to opts.onLogout() provided by the app/router layer.
+
 import { mustClass } from "../../../../shared/css-modules.js";
 import {
   getThemePreference,
@@ -9,6 +19,8 @@ import { el } from "../../shared/dom.js";
 import styles from "./shell.module.css";
 
 type ThemePref = "system" | "dark" | "light";
+
+// Local UI event for re-rendering theme buttons when preference changes.
 const THEME_CHANGED_EVENT = "bk_theme_changed";
 
 function themeIcon(pref: ThemePref): string {
@@ -39,12 +51,15 @@ function createThemeToggle(extraClass: string): HTMLButtonElement {
     btn.title = themeLabel(pref);
   };
 
+  // Keep the handler sync; state changes happen instantly.
   btn.addEventListener("click", () => {
     setThemePreference(nextThemePreference(getThemePreference()));
     window.dispatchEvent(new Event(THEME_CHANGED_EVENT));
   });
 
+  // Update when theme changes from elsewhere too.
   window.addEventListener(THEME_CHANGED_EVENT, refresh);
+
   refresh();
   return btn;
 }
@@ -67,6 +82,7 @@ function createMobileMenu(opts: Readonly<{ themeToggle: HTMLButtonElement; onLog
     "☰"
   ) as HTMLButtonElement;
 
+  // Overlay sits outside header so it can cover the whole viewport.
   const overlay = el("div", {
     class: mustClass(styles, "menuOverlay"),
     "aria-hidden": "true",
@@ -110,17 +126,19 @@ function createMobileMenu(opts: Readonly<{ themeToggle: HTMLButtonElement; onLog
     opts.themeToggle
   );
 
+  const nav = el(
+    "nav",
+    { class: mustClass(styles, "menuNav"), "aria-label": "Client navigation" },
+    el("a", { class: mustClass(styles, "menuLink"), href: "/client/dashboard" }, "Dashboard"),
+    el("a", { class: mustClass(styles, "menuLink"), href: "/client/orders" }, "Orders (soon)"),
+    el("a", { class: mustClass(styles, "menuLink"), href: "/client/deliveries" }, "Deliveries (soon)"),
+    el("a", { class: mustClass(styles, "menuLink"), href: "/client/profile" }, "Profile (soon)")
+  );
+
   const body = el(
     "div",
     { class: mustClass(styles, "menuBody") },
-    el(
-      "nav",
-      { class: mustClass(styles, "menuNav"), "aria-label": "Client navigation" },
-      el("a", { class: mustClass(styles, "menuLink"), href: "/client/dashboard" }, "Dashboard"),
-      el("a", { class: mustClass(styles, "menuLink"), href: "/client/orders" }, "Orders (soon)"),
-      el("a", { class: mustClass(styles, "menuLink"), href: "/client/deliveries" }, "Deliveries (soon)"),
-      el("a", { class: mustClass(styles, "menuLink"), href: "/client/profile" }, "Profile (soon)")
-    ),
+    nav,
     themeRow,
     el("div", { class: mustClass(styles, "menuRow") }, logoutBtn)
   );
@@ -128,6 +146,7 @@ function createMobileMenu(opts: Readonly<{ themeToggle: HTMLButtonElement; onLog
   panel.append(menuHeader, body);
   overlay.append(panel);
 
+  // Simple focus restore so keyboard users return to where they were.
   let lastFocus: HTMLElement | null = null;
 
   const isOpen = (): boolean => overlay.getAttribute("data-open") === "true";
@@ -140,9 +159,11 @@ function createMobileMenu(opts: Readonly<{ themeToggle: HTMLButtonElement; onLog
     overlay.setAttribute("data-open", "true");
     overlay.setAttribute("aria-hidden", "false");
     burger.setAttribute("aria-expanded", "true");
+
+    // Prevent background scroll while menu is open.
     document.documentElement.classList.add(mustClass(styles, "noScroll"));
 
-    // Focus first link
+    // Focus first nav link, else close button.
     const firstLink = panel.querySelector("a");
     if (firstLink instanceof HTMLAnchorElement) firstLink.focus();
     else closeBtn.focus();
@@ -154,6 +175,7 @@ function createMobileMenu(opts: Readonly<{ themeToggle: HTMLButtonElement; onLog
     overlay.removeAttribute("data-open");
     overlay.setAttribute("aria-hidden", "true");
     burger.setAttribute("aria-expanded", "false");
+
     document.documentElement.classList.remove(mustClass(styles, "noScroll"));
 
     if (lastFocus) lastFocus.focus();
@@ -167,14 +189,19 @@ function createMobileMenu(opts: Readonly<{ themeToggle: HTMLButtonElement; onLog
 
   closeBtn.addEventListener("click", close);
 
+  // Click outside the panel closes it.
   overlay.addEventListener("click", (e) => {
     if (e.target === overlay) close();
   });
 
+  // Escape closes it.
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && isOpen()) close();
   });
 
+  // Logout from menu:
+  // - Close menu immediately for UI responsiveness
+  // - Delegate actual logout behavior to app layer
   logoutBtn.addEventListener("click", () => {
     close();
     opts.onLogout();
@@ -184,12 +211,13 @@ function createMobileMenu(opts: Readonly<{ themeToggle: HTMLButtonElement; onLog
 }
 
 export function renderClientShell(content: HTMLElement, opts: Readonly<{ onLogout: () => void }>): HTMLElement {
+  // Theme must be initialized once per surface bootstrap.
   initTheme();
 
   const root = document.createElement("div");
   root.className = mustClass(styles, "shell");
 
-  // Skip link
+  // A11y: skip link for keyboard users.
   const skip = el("a", { class: mustClass(styles, "skip"), href: "#main" }, "Skip to content");
 
   const brand = el(
@@ -199,10 +227,16 @@ export function renderClientShell(content: HTMLElement, opts: Readonly<{ onLogou
     el("span", { class: mustClass(styles, "surfaceLabel") }, "Client")
   );
 
-  // No theme toggle in header (per requirement)
-  const logout = el("button", { class: mustClass(styles, "logout"), type: "button" }, "Log out") as HTMLButtonElement;
+  // Header logout button (desktop).
+  // IMPORTANT: keep handler sync; the app layer may launch async work.
+  const logout = el(
+    "button",
+    { class: mustClass(styles, "logout"), type: "button" },
+    "Log out"
+  ) as HTMLButtonElement;
   logout.addEventListener("click", () => opts.onLogout());
 
+  // Mobile menu has its own theme toggle.
   const menuTheme = createThemeToggle(mustClass(styles, "themeToggleMenu"));
   const mobileMenu = createMobileMenu({ themeToggle: menuTheme, onLogout: opts.onLogout });
 
@@ -217,7 +251,7 @@ export function renderClientShell(content: HTMLElement, opts: Readonly<{ onLogou
 
   const main = el("main", { class: mustClass(styles, "main"), id: "main" }, content);
 
-  // Footer: links in middle, copyright under links, theme toggle on right
+  // Footer theme toggle (right side).
   const footerTheme = createThemeToggle(mustClass(styles, "themeToggleFooter"));
 
   const footer = el(
@@ -247,14 +281,11 @@ export function renderClientShell(content: HTMLElement, opts: Readonly<{ onLogou
         el("div", { class: mustClass(styles, "footerCopy") }, "© ", String(new Date().getFullYear()), " Balance Kitchen")
       ),
 
-      el(
-        "div",
-        { class: mustClass(styles, "footerRight") },
-        footerTheme
-      )
+      el("div", { class: mustClass(styles, "footerRight") }, footerTheme)
     )
   );
 
+  // Ensure toggles render correct initial icon/labels.
   window.dispatchEvent(new Event(THEME_CHANGED_EVENT));
 
   root.append(header, mobileMenu.overlay, main, footer);

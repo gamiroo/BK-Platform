@@ -119,6 +119,9 @@ export const identityUsers = pgTable("identity_users", {
   email: text("email").notNull(),
   emailVerifiedAt: timestamp("email_verified_at", { withTimezone: true }),
   passwordHash: text("password_hash"),
+  // Stores a PHC-formatted password hash string (Argon2id).
+  // Example: $argon2id$v=19$m=65536,t=3,p=1$...$...
+
   firstName: text("first_name"),
   lastName: text("last_name"),
   phone: text("phone"),
@@ -129,6 +132,8 @@ export const identityUsers = pgTable("identity_users", {
 
 // Add unique index for email in real schema file.
 ```
+
+> **Password hashing contract:** `identity_users.password_hash` MUST store the full **Argon2id PHC string** (not raw salts, not split fields).
 
 ### 5.2 identity_roles + identity_role_assignments
 
